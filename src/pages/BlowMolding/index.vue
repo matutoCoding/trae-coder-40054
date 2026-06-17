@@ -1,35 +1,76 @@
 <script setup lang="ts">
-import { ref, computed, onMounted, onBeforeUnmount } from 'vue'
+import { ref, computed, onMounted, onBeforeUnmount, nextTick } from 'vue'
 import * as echarts from 'echarts'
 import {
   Play,
   Pause,
-  Clock,
   Settings,
   TrendingUp,
   Activity,
   Zap,
   Gauge,
   Thermometer,
-  Eye,
   Sliders,
-  Power,
   ChevronLeft,
   ChevronRight,
   List,
-  LineChart
+  LineChart,
+  Plus,
+  Trash2,
+  CheckCircle,
+  RotateCcw,
+  Edit,
+  Search
 } from 'lucide-vue-next'
 import { useAppStore } from '@/stores/app'
 import type { BlowMoldingRecord } from '@/types'
+import BaseModal from '@/components/Modal/BaseModal.vue'
+import { useToast } from '@/composables/useToast'
 
 const store = useAppStore()
+const toast = useToast()
 
 const activeTab = ref<'records' | 'chart'>('records')
 const currentPage = ref(1)
 const pageSize = ref(5)
+const searchKeyword = ref('')
+const statusFilter = ref('')
 
 const chartRef = ref<HTMLElement>()
 let chart: echarts.ECharts | null = null
+
+const showCreateFromQualifiedModal = ref(false)
+const showAddRecordModal = ref(false)
+const showAdjustParamsModal = ref(false)
+const showDeleteConfirmModal = ref(false)
+
+const createFromQualifiedForm = ref({
+  purchaseId: '',
+  machineNo: ''
+})
+
+const addRecordForm = ref({
+  machineNo: '',
+  moldNo: '',
+  productSpec: '',
+  heatingPower: 85,
+  blowPressure: 2.8,
+  preformTemp: 105,
+  operator: ''
+})
+
+const adjustParamsForm = ref({
+  id: '',
+  heatingPower: 0,
+  blowPressure: 0,
+  preformTemp: 0
+})
+
+const deleteTargetId = ref('')
+
+const qualifiedPurchaseOrders = computed(() =>
+  store.purchaseOrders.filter(o => o.status === 'qualified')
+)
 
 const blowMoldingEquipments = computed(() =>
   store.equipments.filter(e => e.type === 'blower')
@@ -47,32 +88,51 @@ const idleCount = computed(() =>
   blowMoldingEquipments.value.filter(e => e.status === 'idle' || e.status === 'fault').length
 )
 
-const todayOutput = computed(() =>
-  store.blowMoldingRecords
-    .filter(r => r.startTime.startsWith('2026-06-17'))
-    .reduce((sum, r) => sum + r.output, 0)
-)
-
-const avgQualifiedRate = computed(() => {
-  const records = store.blowMoldingRecords.filter(r => r.output > 0)
-  if (records.length === 0) return 0
-  const totalOutput = records.reduce((sum, r) => sum + r.output, 0)
-  const totalDefect = records.reduce((sum, r) => sum + r.defectCount, 0)
-  return ((totalOutput - totalDefect) / totalOutput * 100).toFixed(1)
+const todayOutput = computed(() => {
+  const today = new Date().toISOString().split('T')[0]
+  return store.blowMoldingRecords.filter(r => r.startTime?.startsWith(today)).reduce((s, r) => s + r.output, 0)
 })
 
-const energyConsumption = computed(() => {
-  return (store.blowMoldingRecords.length * 125.6).toFixed(1)
+const runningMachines = computed(() => store.equipments.filter(e => e.status === 'running').length)
+
+const avgQualifiedRate = computed(() => {
+  const total = store.blowMoldingRecords.reduce((s, r) => s + r.output, 0)
+  const defect = store.blowMoldingRecords.reduce((s, r) => s + r.defectCount, 0)
+  return total > 0 ? ((total - defect) / total * 100).toFixed(1) : '0.0'
+})
+
+const energyConsumption = computed(() =>
+  (store.blowMoldingRecords.length * 125.6).toFixed(1)
+)
+
+const filteredRecords = computed(() => {
+  let result = store.blowMoldingRecords
+
+  if (searchKeyword.value) {
+    const keyword = searchKeyword.value.toLowerCase()
+    result = result.filter(r =>
+      r.id.toLowerCase().includes(keyword) ||
+      r.machineNo.toLowerCase().includes(keyword) ||
+      r.moldNo.toLowerCase().includes(keyword) ||
+      r.productSpec.toLowerCase().includes(keyword) ||
+      r.operator.toLowerCase().includes(keyword)
+    )
+  }
+
+  if (statusFilter.value) {
+    result = result.filter(r => r.status === statusFilter.value)
+  }
+
+  return result
 })
 
 const paginatedRecords = computed(() => {
   const start = (currentPage.value - 1) * pageSize.value
-  const end = start + pageSize.value
-  return store.blowMoldingRecords.slice(start, end)
+  return filteredRecords.value.slice(start, start + pageSize.value)
 })
 
 const totalPages = computed(() =>
-  Math.ceil(store.blowMoldingRecords.length / pageSize.value)
+  Math.max(1, Math.ceil(filteredRecords.value.length / pageSize.value))
 )
 
 const getStatusColor = (status: string) => {
@@ -114,19 +174,122 @@ const getEquipmentStatusText = (status: string) => {
 }
 
 const handlePrevPage = () => {
-  if (currentPage.value > 1) {
-    currentPage.value--
-  }
+  if (currentPage.value > 1) currentPage.value--
 }
 
 const handleNextPage = () => {
-  if (currentPage.value < totalPages.value) {
-    currentPage.value++
+  if (currentPage.value < totalPages.value) currentPage.value++
+}
+
+const openCreateFromQualifiedModal = () => {
+  createFromQualifiedForm.value = { purchaseId: '', machineNo: '' }
+  showCreateFromQualifiedModal.value = true
+}
+
+const handleCreateFromQualified = () => {
+  const { purchaseId, machineNo } = createFromQualifiedForm.value
+  if (!purchaseId) {
+    toast.warning('请选择合格采购单')
+    return
   }
+  if (!machineNo) {
+    toast.warning('请选择机台号')
+    return
+  }
+  const result = store.createBlowMoldingFromQualified(purchaseId, machineNo)
+  if (result) {
+    showCreateFromQualifiedModal.value = false
+    toast.success('生产记录创建成功')
+  } else {
+    toast.error('创建失败，请检查采购单状态')
+  }
+}
+
+const openAddRecordModal = () => {
+  addRecordForm.value = {
+    machineNo: '',
+    moldNo: '',
+    productSpec: '',
+    heatingPower: 85,
+    blowPressure: 2.8,
+    preformTemp: 105,
+    operator: ''
+  }
+  showAddRecordModal.value = true
+}
+
+const handleAddRecord = () => {
+  const f = addRecordForm.value
+  if (!f.machineNo) { toast.warning('请填写机台号'); return }
+  if (!f.moldNo) { toast.warning('请填写模具号'); return }
+  if (!f.productSpec) { toast.warning('请填写产品规格'); return }
+  if (!f.operator) { toast.warning('请填写操作员'); return }
+
+  store.addBlowMoldingRecord({
+    machineNo: f.machineNo,
+    moldNo: f.moldNo,
+    productSpec: f.productSpec,
+    heatingPower: f.heatingPower,
+    blowPressure: f.blowPressure,
+    preformTemp: f.preformTemp,
+    output: 0,
+    defectCount: 0,
+    startTime: new Date().toLocaleString('zh-CN', { hour12: false }).replace(/\//g, '-'),
+    endTime: '',
+    status: 'running',
+    operator: f.operator,
+    remark: ''
+  })
+  showAddRecordModal.value = false
+  toast.success('吹瓶记录新增成功')
+}
+
+const handlePause = (record: BlowMoldingRecord) => {
+  store.pauseBlowMolding(record.id)
+  toast.success('已停产')
+}
+
+const handleStart = (record: BlowMoldingRecord) => {
+  store.startBlowMolding(record.id)
+  toast.success('已复产')
+}
+
+const handleComplete = (record: BlowMoldingRecord) => {
+  store.completeBlowMolding(record.id)
+  toast.success('生产已完成')
+}
+
+const openAdjustParamsModal = (record: BlowMoldingRecord) => {
+  adjustParamsForm.value = {
+    id: record.id,
+    heatingPower: record.heatingPower,
+    blowPressure: record.blowPressure,
+    preformTemp: record.preformTemp
+  }
+  showAdjustParamsModal.value = true
+}
+
+const handleAdjustParams = () => {
+  const { id, ...data } = adjustParamsForm.value
+  store.updateBlowMoldingRecord(id, data)
+  showAdjustParamsModal.value = false
+  toast.success('参数调整成功')
+}
+
+const confirmDelete = (id: string) => {
+  deleteTargetId.value = id
+  showDeleteConfirmModal.value = true
+}
+
+const handleDelete = () => {
+  store.deleteBlowMoldingRecord(deleteTargetId.value)
+  showDeleteConfirmModal.value = false
+  toast.success('记录已删除')
 }
 
 const initChart = () => {
   if (!chartRef.value) return
+  if (chart) chart.dispose()
 
   chart = echarts.init(chartRef.value)
 
@@ -140,18 +303,13 @@ const initChart = () => {
       backgroundColor: 'rgba(255, 255, 255, 0.95)',
       borderColor: '#e2e8f0',
       borderWidth: 1,
-      textStyle: {
-        color: '#334155'
-      }
+      textStyle: { color: '#334155' }
     },
     legend: {
       data: ['加热功率(%)', '吹瓶压力(MPa)'],
       top: 0,
       right: 0,
-      textStyle: {
-        color: '#64748b',
-        fontSize: 12
-      }
+      textStyle: { color: '#64748b', fontSize: 12 }
     },
     grid: {
       left: '3%',
@@ -164,15 +322,8 @@ const initChart = () => {
       type: 'category',
       boundaryGap: false,
       data: timeData,
-      axisLine: {
-        lineStyle: {
-          color: '#e2e8f0'
-        }
-      },
-      axisLabel: {
-        color: '#64748b',
-        fontSize: 12
-      }
+      axisLine: { lineStyle: { color: '#e2e8f0' } },
+      axisLabel: { color: '#64748b', fontSize: 12 }
     },
     yAxis: [
       {
@@ -181,21 +332,10 @@ const initChart = () => {
         min: 70,
         max: 100,
         position: 'left',
-        axisLine: {
-          show: false
-        },
-        axisTick: {
-          show: false
-        },
-        splitLine: {
-          lineStyle: {
-            color: '#f1f5f9'
-          }
-        },
-        axisLabel: {
-          color: '#64748b',
-          fontSize: 12
-        }
+        axisLine: { show: false },
+        axisTick: { show: false },
+        splitLine: { lineStyle: { color: '#f1f5f9' } },
+        axisLabel: { color: '#64748b', fontSize: 12 }
       },
       {
         type: 'value',
@@ -203,19 +343,10 @@ const initChart = () => {
         min: 2,
         max: 4,
         position: 'right',
-        axisLine: {
-          show: false
-        },
-        axisTick: {
-          show: false
-        },
-        splitLine: {
-          show: false
-        },
-        axisLabel: {
-          color: '#64748b',
-          fontSize: 12
-        }
+        axisLine: { show: false },
+        axisTick: { show: false },
+        splitLine: { show: false },
+        axisLabel: { color: '#64748b', fontSize: 12 }
       }
     ],
     series: [
@@ -225,19 +356,14 @@ const initChart = () => {
         smooth: true,
         yAxisIndex: 0,
         data: heatingPowerData,
-        lineStyle: {
-          color: '#f59e0b',
-          width: 2
-        },
+        lineStyle: { color: '#f59e0b', width: 2 },
         areaStyle: {
           color: new echarts.graphic.LinearGradient(0, 0, 0, 1, [
             { offset: 0, color: 'rgba(245, 158, 11, 0.2)' },
             { offset: 1, color: 'rgba(245, 158, 11, 0.02)' }
           ])
         },
-        itemStyle: {
-          color: '#f59e0b'
-        }
+        itemStyle: { color: '#f59e0b' }
       },
       {
         name: '吹瓶压力(MPa)',
@@ -245,19 +371,14 @@ const initChart = () => {
         smooth: true,
         yAxisIndex: 1,
         data: blowPressureData,
-        lineStyle: {
-          color: '#0ea5e9',
-          width: 2
-        },
+        lineStyle: { color: '#0ea5e9', width: 2 },
         areaStyle: {
           color: new echarts.graphic.LinearGradient(0, 0, 0, 1, [
             { offset: 0, color: 'rgba(14, 165, 233, 0.2)' },
             { offset: 1, color: 'rgba(14, 165, 233, 0.02)' }
           ])
         },
-        itemStyle: {
-          color: '#0ea5e9'
-        }
+        itemStyle: { color: '#0ea5e9' }
       }
     ]
   }
@@ -269,9 +390,16 @@ const handleResize = () => {
   chart?.resize()
 }
 
+const handleTabChange = (tab: 'records' | 'chart') => {
+  activeTab.value = tab
+  if (tab === 'chart') {
+    nextTick(() => initChart())
+  }
+}
+
 onMounted(() => {
   if (activeTab.value === 'chart') {
-    initChart()
+    nextTick(() => initChart())
   }
   window.addEventListener('resize', handleResize)
 })
@@ -280,27 +408,6 @@ onBeforeUnmount(() => {
   chart?.dispose()
   window.removeEventListener('resize', handleResize)
 })
-
-const handleTabChange = (tab: 'records' | 'chart') => {
-  activeTab.value = tab
-  if (tab === 'chart') {
-    setTimeout(() => {
-      initChart()
-    }, 100)
-  }
-}
-
-const viewDetail = (record: BlowMoldingRecord) => {
-  console.log('查看详情:', record.id)
-}
-
-const adjustParams = (record: BlowMoldingRecord) => {
-  console.log('参数调整:', record.id)
-}
-
-const toggleProduction = (record: BlowMoldingRecord) => {
-  console.log('停产/复产:', record.id)
-}
 </script>
 
 <template>
@@ -309,6 +416,22 @@ const toggleProduction = (record: BlowMoldingRecord) => {
       <div>
         <h2 class="text-2xl font-bold text-slate-800">加热吹瓶</h2>
         <p class="text-sm text-slate-500 mt-1">吹瓶生产管理与参数监控</p>
+      </div>
+      <div class="flex items-center gap-3">
+        <button
+          @click="openCreateFromQualifiedModal"
+          class="inline-flex items-center gap-2 px-4 py-2.5 bg-gradient-to-r from-cyan-500 to-blue-500 text-white text-sm font-medium rounded-lg hover:from-cyan-600 hover:to-blue-600 transition-all shadow-sm hover:shadow-md"
+        >
+          <Plus class="w-4 h-4" />
+          创建生产
+        </button>
+        <button
+          @click="openAddRecordModal"
+          class="inline-flex items-center gap-2 px-4 py-2.5 bg-white border border-slate-200 text-slate-700 text-sm font-medium rounded-lg hover:bg-slate-50 transition-colors shadow-sm"
+        >
+          <Edit class="w-4 h-4" />
+          新增记录
+        </button>
       </div>
     </div>
 
@@ -403,13 +526,13 @@ const toggleProduction = (record: BlowMoldingRecord) => {
           <div>
             <p class="text-sm text-slate-500">运行设备数</p>
             <div class="flex items-baseline gap-1 mt-1">
-              <span class="text-2xl font-bold text-slate-800">{{ runningCount }}</span>
+              <span class="text-2xl font-bold text-slate-800">{{ runningMachines }}</span>
               <span class="text-sm text-slate-500">/{{ blowMoldingEquipments.length }}台</span>
             </div>
             <div class="mt-2 flex items-center gap-1">
               <Activity class="w-3.5 h-3.5 text-emerald-500" />
               <span class="text-xs text-emerald-600 font-medium">
-                使用率 {{ ((runningCount / blowMoldingEquipments.length) * 100).toFixed(0) }}%
+                使用率 {{ blowMoldingEquipments.length > 0 ? ((runningMachines / blowMoldingEquipments.length) * 100).toFixed(0) : 0 }}%
               </span>
             </div>
           </div>
@@ -487,6 +610,27 @@ const toggleProduction = (record: BlowMoldingRecord) => {
       </div>
 
       <div v-if="activeTab === 'records'" class="p-6">
+        <div class="flex flex-col sm:flex-row items-start sm:items-center gap-3 mb-4">
+          <div class="relative flex-1 w-full sm:max-w-xs">
+            <Search class="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
+            <input
+              v-model="searchKeyword"
+              type="text"
+              placeholder="搜索编号、机台、模具、规格、操作员..."
+              class="w-full pl-10 pr-4 py-2.5 text-sm border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-cyan-500/20 focus:border-cyan-500 transition-colors"
+            />
+          </div>
+          <select
+            v-model="statusFilter"
+            class="px-4 py-2.5 text-sm border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-cyan-500/20 focus:border-cyan-500 transition-colors bg-white"
+          >
+            <option value="">全部状态</option>
+            <option value="running">运行中</option>
+            <option value="paused">暂停</option>
+            <option value="completed">已完成</option>
+          </select>
+        </div>
+
         <div class="overflow-x-auto">
           <table class="w-full">
             <thead>
@@ -530,27 +674,45 @@ const toggleProduction = (record: BlowMoldingRecord) => {
                   </span>
                 </td>
                 <td class="py-3 px-4">
-                  <div class="flex items-center gap-2">
+                  <div class="flex items-center gap-1 flex-wrap">
                     <button
-                      @click="viewDetail(record)"
-                      class="flex items-center gap-1 text-xs text-cyan-600 hover:text-cyan-700 font-medium"
+                      v-if="record.status === 'running'"
+                      @click="handlePause(record)"
+                      class="flex items-center gap-1 text-xs text-amber-600 hover:text-amber-700 font-medium px-2 py-1 rounded hover:bg-amber-50 transition-colors"
                     >
-                      <Eye class="w-3.5 h-3.5" />
-                      查看详情
+                      <Pause class="w-3.5 h-3.5" />
+                      停产
                     </button>
                     <button
-                      @click="adjustParams(record)"
-                      class="flex items-center gap-1 text-xs text-amber-600 hover:text-amber-700 font-medium"
+                      v-if="record.status === 'paused'"
+                      @click="handleStart(record)"
+                      class="flex items-center gap-1 text-xs text-emerald-600 hover:text-emerald-700 font-medium px-2 py-1 rounded hover:bg-emerald-50 transition-colors"
+                    >
+                      <RotateCcw class="w-3.5 h-3.5" />
+                      复产
+                    </button>
+                    <button
+                      v-if="record.status === 'running'"
+                      @click="handleComplete(record)"
+                      class="flex items-center gap-1 text-xs text-blue-600 hover:text-blue-700 font-medium px-2 py-1 rounded hover:bg-blue-50 transition-colors"
+                    >
+                      <CheckCircle class="w-3.5 h-3.5" />
+                      完成
+                    </button>
+                    <button
+                      v-if="record.status === 'running' || record.status === 'paused'"
+                      @click="openAdjustParamsModal(record)"
+                      class="flex items-center gap-1 text-xs text-cyan-600 hover:text-cyan-700 font-medium px-2 py-1 rounded hover:bg-cyan-50 transition-colors"
                     >
                       <Sliders class="w-3.5 h-3.5" />
                       参数调整
                     </button>
                     <button
-                      @click="toggleProduction(record)"
-                      class="flex items-center gap-1 text-xs text-slate-600 hover:text-slate-700 font-medium"
+                      @click="confirmDelete(record.id)"
+                      class="flex items-center gap-1 text-xs text-red-500 hover:text-red-600 font-medium px-2 py-1 rounded hover:bg-red-50 transition-colors"
                     >
-                      <Power class="w-3.5 h-3.5" />
-                      {{ record.status === 'running' ? '停产' : '复产' }}
+                      <Trash2 class="w-3.5 h-3.5" />
+                      删除
                     </button>
                   </div>
                 </td>
@@ -559,9 +721,14 @@ const toggleProduction = (record: BlowMoldingRecord) => {
           </table>
         </div>
 
+        <div v-if="filteredRecords.length === 0" class="py-16 text-center">
+          <List class="w-12 h-12 text-slate-300 mx-auto mb-3" />
+          <p class="text-sm text-slate-400">暂无生产记录</p>
+        </div>
+
         <div class="flex items-center justify-between mt-6 pt-4 border-t border-slate-100">
           <div class="text-sm text-slate-500">
-            共 {{ store.blowMoldingRecords.length }} 条记录，第 {{ currentPage }} / {{ totalPages }} 页
+            共 {{ filteredRecords.length }} 条记录，第 {{ currentPage }} / {{ totalPages }} 页
           </div>
           <div class="flex items-center gap-2">
             <button
@@ -613,5 +780,249 @@ const toggleProduction = (record: BlowMoldingRecord) => {
         <div ref="chartRef" class="w-full h-80"></div>
       </div>
     </div>
+
+    <BaseModal
+      v-model:visible="showCreateFromQualifiedModal"
+      title="创建生产记录"
+      width="520px"
+    >
+      <div class="space-y-4">
+        <div>
+          <label class="block text-sm font-medium text-slate-700 mb-1.5">选择合格采购单</label>
+          <select
+            v-model="createFromQualifiedForm.purchaseId"
+            class="w-full px-4 py-2.5 text-sm border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-cyan-500/20 focus:border-cyan-500 transition-colors bg-white"
+          >
+            <option value="">请选择合格采购单</option>
+            <option
+              v-for="order in qualifiedPurchaseOrders"
+              :key="order.id"
+              :value="order.id"
+            >
+              {{ order.id }} - {{ order.spec }} - {{ order.supplierName }} ({{ order.quantity }}只)
+            </option>
+          </select>
+        </div>
+        <div>
+          <label class="block text-sm font-medium text-slate-700 mb-1.5">选择机台号</label>
+          <select
+            v-model="createFromQualifiedForm.machineNo"
+            class="w-full px-4 py-2.5 text-sm border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-cyan-500/20 focus:border-cyan-500 transition-colors bg-white"
+          >
+            <option value="">请选择机台</option>
+            <option
+              v-for="eq in blowMoldingEquipments"
+              :key="eq.id"
+              :value="eq.equipmentNo"
+            >
+              {{ eq.equipmentNo }} - {{ eq.name }} ({{ getEquipmentStatusText(eq.status) }})
+            </option>
+          </select>
+        </div>
+      </div>
+      <template #footer>
+        <div class="flex justify-end gap-3">
+          <button
+            @click="showCreateFromQualifiedModal = false"
+            class="px-4 py-2 text-sm text-slate-600 bg-slate-100 rounded-lg hover:bg-slate-200 transition-colors"
+          >
+            取消
+          </button>
+          <button
+            @click="handleCreateFromQualified"
+            class="px-4 py-2 text-sm text-white bg-cyan-500 rounded-lg hover:bg-cyan-600 transition-colors"
+          >
+            确认创建
+          </button>
+        </div>
+      </template>
+    </BaseModal>
+
+    <BaseModal
+      v-model:visible="showAddRecordModal"
+      title="新增吹瓶记录"
+      width="560px"
+    >
+      <div class="space-y-4">
+        <div class="grid grid-cols-2 gap-4">
+          <div>
+            <label class="block text-sm font-medium text-slate-700 mb-1.5">机台号</label>
+            <select
+              v-model="addRecordForm.machineNo"
+              class="w-full px-4 py-2.5 text-sm border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-cyan-500/20 focus:border-cyan-500 transition-colors bg-white"
+            >
+              <option value="">请选择机台</option>
+              <option
+                v-for="eq in blowMoldingEquipments"
+                :key="eq.id"
+                :value="eq.equipmentNo"
+              >
+                {{ eq.equipmentNo }}
+              </option>
+            </select>
+          </div>
+          <div>
+            <label class="block text-sm font-medium text-slate-700 mb-1.5">模具号</label>
+            <input
+              v-model="addRecordForm.moldNo"
+              type="text"
+              placeholder="请输入模具号"
+              class="w-full px-4 py-2.5 text-sm border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-cyan-500/20 focus:border-cyan-500 transition-colors"
+            />
+          </div>
+        </div>
+        <div>
+          <label class="block text-sm font-medium text-slate-700 mb-1.5">产品规格</label>
+          <input
+            v-model="addRecordForm.productSpec"
+            type="text"
+            placeholder="请输入产品规格"
+            class="w-full px-4 py-2.5 text-sm border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-cyan-500/20 focus:border-cyan-500 transition-colors"
+          />
+        </div>
+        <div class="grid grid-cols-3 gap-4">
+          <div>
+            <label class="block text-sm font-medium text-slate-700 mb-1.5">加热功率(%)</label>
+            <input
+              v-model.number="addRecordForm.heatingPower"
+              type="number"
+              min="0"
+              max="100"
+              class="w-full px-4 py-2.5 text-sm border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-cyan-500/20 focus:border-cyan-500 transition-colors"
+            />
+          </div>
+          <div>
+            <label class="block text-sm font-medium text-slate-700 mb-1.5">吹瓶压力(MPa)</label>
+            <input
+              v-model.number="addRecordForm.blowPressure"
+              type="number"
+              min="0"
+              step="0.1"
+              class="w-full px-4 py-2.5 text-sm border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-cyan-500/20 focus:border-cyan-500 transition-colors"
+            />
+          </div>
+          <div>
+            <label class="block text-sm font-medium text-slate-700 mb-1.5">瓶坯温度(℃)</label>
+            <input
+              v-model.number="addRecordForm.preformTemp"
+              type="number"
+              min="0"
+              class="w-full px-4 py-2.5 text-sm border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-cyan-500/20 focus:border-cyan-500 transition-colors"
+            />
+          </div>
+        </div>
+        <div>
+          <label class="block text-sm font-medium text-slate-700 mb-1.5">操作员</label>
+          <input
+            v-model="addRecordForm.operator"
+            type="text"
+            placeholder="请输入操作员姓名"
+            class="w-full px-4 py-2.5 text-sm border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-cyan-500/20 focus:border-cyan-500 transition-colors"
+          />
+        </div>
+      </div>
+      <template #footer>
+        <div class="flex justify-end gap-3">
+          <button
+            @click="showAddRecordModal = false"
+            class="px-4 py-2 text-sm text-slate-600 bg-slate-100 rounded-lg hover:bg-slate-200 transition-colors"
+          >
+            取消
+          </button>
+          <button
+            @click="handleAddRecord"
+            class="px-4 py-2 text-sm text-white bg-cyan-500 rounded-lg hover:bg-cyan-600 transition-colors"
+          >
+            确认新增
+          </button>
+        </div>
+      </template>
+    </BaseModal>
+
+    <BaseModal
+      v-model:visible="showAdjustParamsModal"
+      title="参数调整"
+      width="480px"
+    >
+      <div class="space-y-4">
+        <div>
+          <label class="block text-sm font-medium text-slate-700 mb-1.5">加热功率(%)</label>
+          <input
+            v-model.number="adjustParamsForm.heatingPower"
+            type="number"
+            min="0"
+            max="100"
+            class="w-full px-4 py-2.5 text-sm border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-cyan-500/20 focus:border-cyan-500 transition-colors"
+          />
+        </div>
+        <div>
+          <label class="block text-sm font-medium text-slate-700 mb-1.5">吹瓶压力(MPa)</label>
+          <input
+            v-model.number="adjustParamsForm.blowPressure"
+            type="number"
+            min="0"
+            step="0.1"
+            class="w-full px-4 py-2.5 text-sm border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-cyan-500/20 focus:border-cyan-500 transition-colors"
+          />
+        </div>
+        <div>
+          <label class="block text-sm font-medium text-slate-700 mb-1.5">瓶坯温度(℃)</label>
+          <input
+            v-model.number="adjustParamsForm.preformTemp"
+            type="number"
+            min="0"
+            class="w-full px-4 py-2.5 text-sm border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-cyan-500/20 focus:border-cyan-500 transition-colors"
+          />
+        </div>
+      </div>
+      <template #footer>
+        <div class="flex justify-end gap-3">
+          <button
+            @click="showAdjustParamsModal = false"
+            class="px-4 py-2 text-sm text-slate-600 bg-slate-100 rounded-lg hover:bg-slate-200 transition-colors"
+          >
+            取消
+          </button>
+          <button
+            @click="handleAdjustParams"
+            class="px-4 py-2 text-sm text-white bg-cyan-500 rounded-lg hover:bg-cyan-600 transition-colors"
+          >
+            保存调整
+          </button>
+        </div>
+      </template>
+    </BaseModal>
+
+    <BaseModal
+      v-model:visible="showDeleteConfirmModal"
+      title="确认删除"
+      width="400px"
+    >
+      <div class="flex items-start gap-3">
+        <div class="w-10 h-10 bg-red-50 rounded-full flex items-center justify-center flex-shrink-0 mt-0.5">
+          <Trash2 class="w-5 h-5 text-red-500" />
+        </div>
+        <div>
+          <p class="text-sm text-slate-700 font-medium">确定要删除此记录吗？</p>
+          <p class="text-sm text-slate-500 mt-1">此操作不可撤销，删除后数据将无法恢复。</p>
+        </div>
+      </div>
+      <template #footer>
+        <div class="flex justify-end gap-3">
+          <button
+            @click="showDeleteConfirmModal = false"
+            class="px-4 py-2 text-sm text-slate-600 bg-slate-100 rounded-lg hover:bg-slate-200 transition-colors"
+          >
+            取消
+          </button>
+          <button
+            @click="handleDelete"
+            class="px-4 py-2 text-sm text-white bg-red-500 rounded-lg hover:bg-red-600 transition-colors"
+          >
+            确认删除
+          </button>
+        </div>
+      </template>
+    </BaseModal>
   </div>
 </template>

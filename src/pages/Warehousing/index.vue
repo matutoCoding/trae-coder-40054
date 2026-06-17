@@ -2,8 +2,6 @@
 import { ref, computed } from 'vue'
 import {
   Search,
-  Plus,
-  Eye,
   ArrowDownToLine,
   ArrowUpFromLine,
   ChevronLeft,
@@ -18,9 +16,12 @@ import {
   DollarSign
 } from 'lucide-vue-next'
 import { useAppStore } from '@/stores/app'
+import BaseModal from '@/components/Modal/BaseModal.vue'
+import { useToast } from '@/composables/useToast'
 import type { InventoryItem, WarehouseRecord } from '@/types'
 
 const store = useAppStore()
+const toast = useToast()
 
 const activeTab = ref<'inventory' | 'records'>('inventory')
 
@@ -34,6 +35,27 @@ const dateRangeEnd = ref('')
 
 const currentPage = ref(1)
 const pageSize = ref(10)
+
+const showStockInModal = ref(false)
+const showStockOutModal = ref(false)
+
+const stockInForm = ref({
+  specSelect: '',
+  specNew: '',
+  isNewSpec: false,
+  quantity: 0,
+  location: '',
+  batchNo: '',
+  operator: '',
+  remark: ''
+})
+
+const stockOutForm = ref({
+  spec: '',
+  quantity: 0,
+  operator: '',
+  remark: ''
+})
 
 const getInventoryStatusText = (status: InventoryItem['status']) => {
   const statusMap: Record<InventoryItem['status'], string> = {
@@ -155,28 +177,81 @@ const formatAmount = (amount: number) => {
   return amount.toLocaleString('zh-CN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
 }
 
-const handleViewInventory = (item: InventoryItem) => {
-  console.log('查看库存详情:', item.id)
+const openStockInModal = (item?: InventoryItem) => {
+  stockInForm.value = {
+    specSelect: item ? item.spec : '',
+    specNew: '',
+    isNewSpec: false,
+    quantity: 0,
+    location: item ? item.location : '',
+    batchNo: '',
+    operator: '',
+    remark: ''
+  }
+  showStockInModal.value = true
 }
 
-const handleStockIn = (item: InventoryItem) => {
-  console.log('入库操作:', item.id)
+const openStockOutModal = (item: InventoryItem) => {
+  stockOutForm.value = {
+    spec: item.spec,
+    quantity: 0,
+    operator: '',
+    remark: ''
+  }
+  showStockOutModal.value = true
 }
 
-const handleStockOut = (item: InventoryItem) => {
-  console.log('出库操作:', item.id)
+const submitStockIn = () => {
+  const form = stockInForm.value
+  const spec = form.isNewSpec ? form.specNew.trim() : form.specSelect
+  if (!spec) {
+    toast.error('请选择或输入规格')
+    return
+  }
+  if (form.quantity <= 0) {
+    toast.error('请填写有效的入库数量')
+    return
+  }
+  if (!form.location.trim()) {
+    toast.error('请填写库位')
+    return
+  }
+  if (!form.operator.trim()) {
+    toast.error('请填写操作员')
+    return
+  }
+
+  store.stockIn(spec, form.quantity, form.location, form.batchNo, '', form.operator, form.remark)
+  showStockInModal.value = false
+  toast.success(`入库成功：${spec} x ${form.quantity}`)
 }
 
-const handleViewRecord = (record: WarehouseRecord) => {
-  console.log('查看记录详情:', record.id)
-}
+const submitStockOut = () => {
+  const form = stockOutForm.value
+  if (!form.spec) {
+    toast.error('请选择规格')
+    return
+  }
+  if (form.quantity <= 0) {
+    toast.error('请填写有效的出库数量')
+    return
+  }
+  if (!form.operator.trim()) {
+    toast.error('请填写操作员')
+    return
+  }
 
-const handleAddStockIn = () => {
-  console.log('新增入库')
-}
+  const targetItem = store.inventoryItems.find(i => i.spec === form.spec)
+  const result = store.stockOut(form.spec, form.quantity, targetItem?.location || '', '', '', form.operator, form.remark)
 
-const handleAddStockOut = () => {
-  console.log('新增出库')
+  if (!result.success) {
+    const currentQty = targetItem?.quantity || 0
+    toast.error(`库存不足，无法出库！当前库存仅${currentQty}只`)
+    return
+  }
+
+  showStockOutModal.value = false
+  toast.success(`出库成功：${form.spec} x ${form.quantity}`)
 }
 
 const resetInventoryFilters = () => {
@@ -213,20 +288,20 @@ const handleTabChange = (tab: 'inventory' | 'records') => {
           <h2 class="text-xl font-bold text-slate-800">装箱入库管理</h2>
           <p class="text-sm text-slate-500 mt-1">管理库存信息和出入库记录</p>
         </div>
-        <div v-if="activeTab === 'records'" class="flex items-center gap-3">
+        <div class="flex items-center gap-3">
           <button
-            @click="handleAddStockOut"
+            @click="openStockOutModal({ spec: '' } as any)"
             class="flex items-center gap-2 px-4 py-2.5 border border-slate-200 text-slate-600 rounded-lg hover:bg-slate-50 transition-colors font-medium text-sm"
           >
             <ArrowUpFromLine class="w-4 h-4" />
-            新增出库
+            出库
           </button>
           <button
-            @click="handleAddStockIn"
+            @click="openStockInModal()"
             class="flex items-center gap-2 px-4 py-2.5 bg-gradient-to-r from-cyan-500 to-blue-500 text-white rounded-lg hover:from-cyan-600 hover:to-blue-600 transition-all shadow-sm hover:shadow-md font-medium text-sm"
           >
             <ArrowDownToLine class="w-4 h-4" />
-            新增入库
+            入库
           </button>
         </div>
       </div>
@@ -393,21 +468,14 @@ const handleTabChange = (tab: 'inventory' | 'records') => {
                 <td class="px-4 py-4">
                   <div class="flex items-center justify-center gap-1">
                     <button
-                      @click="handleViewInventory(item)"
-                      class="p-1.5 text-slate-400 hover:text-cyan-600 hover:bg-cyan-50 rounded-lg transition-colors"
-                      title="查看详情"
-                    >
-                      <Eye class="w-4 h-4" />
-                    </button>
-                    <button
-                      @click="handleStockIn(item)"
+                      @click="openStockInModal(item)"
                       class="p-1.5 text-slate-400 hover:text-emerald-600 hover:bg-emerald-50 rounded-lg transition-colors"
                       title="入库"
                     >
                       <ArrowDownToLine class="w-4 h-4" />
                     </button>
                     <button
-                      @click="handleStockOut(item)"
+                      @click="openStockOutModal(item)"
                       class="p-1.5 text-slate-400 hover:text-blue-600 hover:bg-blue-50 rounded-lg transition-colors"
                       title="出库"
                     >
@@ -541,7 +609,6 @@ const handleTabChange = (tab: 'inventory' | 'records') => {
                 <th class="px-4 py-3 text-left text-xs font-semibold text-slate-600 uppercase tracking-wider">批次号</th>
                 <th class="px-4 py-3 text-left text-xs font-semibold text-slate-600 uppercase tracking-wider">操作人</th>
                 <th class="px-4 py-3 text-center text-xs font-semibold text-slate-600 uppercase tracking-wider">日期</th>
-                <th class="px-4 py-3 text-center text-xs font-semibold text-slate-600 uppercase tracking-wider">操作</th>
               </tr>
             </thead>
             <tbody class="divide-y divide-slate-200">
@@ -581,20 +648,9 @@ const handleTabChange = (tab: 'inventory' | 'records') => {
                 <td class="px-4 py-4 text-center">
                   <span class="text-sm text-slate-500">{{ record.date }}</span>
                 </td>
-                <td class="px-4 py-4">
-                  <div class="flex items-center justify-center gap-1">
-                    <button
-                      @click="handleViewRecord(record)"
-                      class="p-1.5 text-slate-400 hover:text-cyan-600 hover:bg-cyan-50 rounded-lg transition-colors"
-                      title="查看详情"
-                    >
-                      <Eye class="w-4 h-4" />
-                    </button>
-                  </div>
-                </td>
               </tr>
               <tr v-if="paginatedRecords.length === 0">
-                <td colspan="10" class="px-4 py-12 text-center">
+                <td colspan="9" class="px-4 py-12 text-center">
                   <div class="flex flex-col items-center gap-2">
                     <ListTodo class="w-12 h-12 text-slate-300" />
                     <p class="text-sm text-slate-400">暂无出入库记录</p>
@@ -658,5 +714,181 @@ const handleTabChange = (tab: 'inventory' | 'records') => {
         </div>
       </div>
     </div>
+
+    <BaseModal v-model:visible="showStockInModal" title="新增入库" width="560px">
+      <div class="space-y-4">
+        <div>
+          <label class="block text-sm font-medium text-slate-700 mb-1.5">规格选择方式</label>
+          <div class="flex gap-4">
+            <label class="flex items-center gap-2 cursor-pointer">
+              <input type="radio" v-model="stockInForm.isNewSpec" :value="false" class="accent-cyan-500" />
+              <span class="text-sm text-slate-600">选择已有规格</span>
+            </label>
+            <label class="flex items-center gap-2 cursor-pointer">
+              <input type="radio" v-model="stockInForm.isNewSpec" :value="true" class="accent-cyan-500" />
+              <span class="text-sm text-slate-600">输入新规格</span>
+            </label>
+          </div>
+        </div>
+
+        <div v-if="!stockInForm.isNewSpec">
+          <label class="block text-sm font-medium text-slate-700 mb-1.5">选择规格</label>
+          <select
+            v-model="stockInForm.specSelect"
+            class="w-full px-3 py-2.5 border border-slate-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-cyan-500 focus:border-transparent bg-white"
+          >
+            <option value="">请选择规格</option>
+            <option v-for="item in store.inventoryItems" :key="item.id" :value="item.spec">
+              {{ item.spec }}（库存：{{ item.quantity }} {{ item.unit }}）
+            </option>
+          </select>
+        </div>
+
+        <div v-else>
+          <label class="block text-sm font-medium text-slate-700 mb-1.5">新规格名称</label>
+          <input
+            v-model="stockInForm.specNew"
+            type="text"
+            placeholder="请输入新规格型号"
+            class="w-full px-3 py-2.5 border border-slate-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-cyan-500 focus:border-transparent"
+          />
+        </div>
+
+        <div class="grid grid-cols-2 gap-4">
+          <div>
+            <label class="block text-sm font-medium text-slate-700 mb-1.5">入库数量</label>
+            <input
+              v-model.number="stockInForm.quantity"
+              type="number"
+              min="1"
+              placeholder="请输入数量"
+              class="w-full px-3 py-2.5 border border-slate-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-cyan-500 focus:border-transparent"
+            />
+          </div>
+          <div>
+            <label class="block text-sm font-medium text-slate-700 mb-1.5">库位</label>
+            <input
+              v-model="stockInForm.location"
+              type="text"
+              placeholder="请输入库位"
+              class="w-full px-3 py-2.5 border border-slate-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-cyan-500 focus:border-transparent"
+            />
+          </div>
+        </div>
+
+        <div class="grid grid-cols-2 gap-4">
+          <div>
+            <label class="block text-sm font-medium text-slate-700 mb-1.5">批次号</label>
+            <input
+              v-model="stockInForm.batchNo"
+              type="text"
+              placeholder="请输入批次号"
+              class="w-full px-3 py-2.5 border border-slate-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-cyan-500 focus:border-transparent"
+            />
+          </div>
+          <div>
+            <label class="block text-sm font-medium text-slate-700 mb-1.5">操作员</label>
+            <input
+              v-model="stockInForm.operator"
+              type="text"
+              placeholder="请输入操作员"
+              class="w-full px-3 py-2.5 border border-slate-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-cyan-500 focus:border-transparent"
+            />
+          </div>
+        </div>
+
+        <div>
+          <label class="block text-sm font-medium text-slate-700 mb-1.5">备注</label>
+          <textarea
+            v-model="stockInForm.remark"
+            rows="2"
+            placeholder="选填"
+            class="w-full px-3 py-2.5 border border-slate-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-cyan-500 focus:border-transparent resize-none"
+          ></textarea>
+        </div>
+      </div>
+
+      <template #footer>
+        <div class="flex justify-end gap-3">
+          <button
+            @click="showStockInModal = false"
+            class="px-4 py-2 border border-slate-200 text-slate-600 rounded-lg text-sm hover:bg-slate-50 transition-colors"
+          >
+            取消
+          </button>
+          <button
+            @click="submitStockIn"
+            class="px-4 py-2 bg-gradient-to-r from-cyan-500 to-blue-500 text-white rounded-lg text-sm hover:from-cyan-600 hover:to-blue-600 transition-all shadow-sm font-medium"
+          >
+            确认入库
+          </button>
+        </div>
+      </template>
+    </BaseModal>
+
+    <BaseModal v-model:visible="showStockOutModal" title="新增出库" width="560px">
+      <div class="space-y-4">
+        <div>
+          <label class="block text-sm font-medium text-slate-700 mb-1.5">选择规格</label>
+          <select
+            v-model="stockOutForm.spec"
+            class="w-full px-3 py-2.5 border border-slate-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-cyan-500 focus:border-transparent bg-white"
+          >
+            <option value="">请选择规格</option>
+            <option v-for="item in store.inventoryItems" :key="item.id" :value="item.spec">
+              {{ item.spec }}（库存：{{ item.quantity }} {{ item.unit }}）
+            </option>
+          </select>
+        </div>
+
+        <div>
+          <label class="block text-sm font-medium text-slate-700 mb-1.5">出库数量</label>
+          <input
+            v-model.number="stockOutForm.quantity"
+            type="number"
+            min="1"
+            placeholder="请输入数量"
+            class="w-full px-3 py-2.5 border border-slate-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-cyan-500 focus:border-transparent"
+          />
+        </div>
+
+        <div>
+          <label class="block text-sm font-medium text-slate-700 mb-1.5">操作员</label>
+          <input
+            v-model="stockOutForm.operator"
+            type="text"
+            placeholder="请输入操作员"
+            class="w-full px-3 py-2.5 border border-slate-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-cyan-500 focus:border-transparent"
+          />
+        </div>
+
+        <div>
+          <label class="block text-sm font-medium text-slate-700 mb-1.5">备注</label>
+          <textarea
+            v-model="stockOutForm.remark"
+            rows="2"
+            placeholder="选填"
+            class="w-full px-3 py-2.5 border border-slate-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-cyan-500 focus:border-transparent resize-none"
+          ></textarea>
+        </div>
+      </div>
+
+      <template #footer>
+        <div class="flex justify-end gap-3">
+          <button
+            @click="showStockOutModal = false"
+            class="px-4 py-2 border border-slate-200 text-slate-600 rounded-lg text-sm hover:bg-slate-50 transition-colors"
+          >
+            取消
+          </button>
+          <button
+            @click="submitStockOut"
+            class="px-4 py-2 bg-gradient-to-r from-cyan-500 to-blue-500 text-white rounded-lg text-sm hover:from-cyan-600 hover:to-blue-600 transition-all shadow-sm font-medium"
+          >
+            确认出库
+          </button>
+        </div>
+      </template>
+    </BaseModal>
   </div>
 </template>

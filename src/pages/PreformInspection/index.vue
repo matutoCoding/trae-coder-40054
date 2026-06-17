@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, computed } from 'vue'
+import { ref, computed, reactive, watch } from 'vue'
 import {
   Search,
   Plus,
@@ -15,12 +15,16 @@ import {
   Layers,
   ChevronLeft,
   ChevronRight,
-  MoreHorizontal
+  MoreHorizontal,
+  AlertTriangle
 } from 'lucide-vue-next'
 import { useAppStore } from '@/stores/app'
+import { useToast } from '@/composables/useToast'
+import BaseModal from '@/components/Modal/BaseModal.vue'
 import type { PreformInspection } from '@/types'
 
 const store = useAppStore()
+const toast = useToast()
 
 const searchKeyword = ref('')
 const conclusionFilter = ref('')
@@ -29,7 +33,130 @@ const currentPage = ref(1)
 const pageSize = ref(10)
 const expandedRows = ref<string[]>([])
 
-const today = '2026-06-17'
+const showModal = ref(false)
+const showDeleteConfirm = ref(false)
+const deleteTargetId = ref('')
+const editingId = ref('')
+const isEditing = computed(() => !!editingId.value)
+
+const today = new Date().toISOString().split('T')[0]
+
+const defaultForm = () => ({
+  purchaseId: '',
+  purchaseSpec: '',
+  supplierName: '',
+  sampleCount: 0,
+  qualifiedCount: 0,
+  avgWeight: 0,
+  minWeight: 0,
+  maxWeight: 0,
+  appearanceResult: 'pending' as const,
+  transparencyResult: 'pending' as const,
+  conclusion: 'pending' as const,
+  inspector: '',
+  inspectDate: today,
+  remark: ''
+})
+
+const form = reactive(defaultForm())
+
+watch(() => form.purchaseId, (id) => {
+  const order = store.purchaseOrders.find(o => o.id === id)
+  if (order) {
+    form.purchaseSpec = order.spec
+    form.supplierName = order.supplierName
+    form.avgWeight = order.weight
+    form.minWeight = Math.round(order.weight * 0.95 * 100) / 100
+    form.maxWeight = Math.round(order.weight * 1.05 * 100) / 100
+  }
+})
+
+const inspectingOrders = computed(() =>
+  store.purchaseOrders.filter(o => o.status === 'inspecting')
+)
+
+const resetForm = () => {
+  Object.assign(form, defaultForm())
+  editingId.value = ''
+}
+
+const handleAdd = () => {
+  resetForm()
+  showModal.value = true
+}
+
+const handleView = (item: PreformInspection) => {
+  expandedRows.value = expandedRows.value.includes(item.id)
+    ? expandedRows.value.filter(id => id !== item.id)
+    : [...expandedRows.value, item.id]
+}
+
+const handleEdit = (item: PreformInspection) => {
+  editingId.value = item.id
+  Object.assign(form, {
+    purchaseId: item.purchaseId,
+    purchaseSpec: item.purchaseSpec,
+    supplierName: item.supplierName,
+    sampleCount: item.sampleCount,
+    qualifiedCount: item.qualifiedCount,
+    avgWeight: item.avgWeight,
+    minWeight: item.minWeight,
+    maxWeight: item.maxWeight,
+    appearanceResult: item.appearanceResult,
+    transparencyResult: item.transparencyResult,
+    conclusion: item.conclusion,
+    inspector: item.inspector,
+    inspectDate: item.inspectDate,
+    remark: item.remark
+  })
+  showModal.value = true
+}
+
+const handleDelete = (item: PreformInspection) => {
+  deleteTargetId.value = item.id
+  showDeleteConfirm.value = true
+}
+
+const confirmDelete = () => {
+  store.deletePreformInspection(deleteTargetId.value)
+  toast.success('检验记录已删除')
+  showDeleteConfirm.value = false
+  deleteTargetId.value = ''
+}
+
+const handleSave = () => {
+  if (!form.purchaseId) {
+    toast.warning('请选择采购单')
+    return
+  }
+  if (form.sampleCount <= 0) {
+    toast.warning('抽样数必须大于0')
+    return
+  }
+  if (form.qualifiedCount > form.sampleCount) {
+    toast.warning('合格数不能大于抽样数')
+    return
+  }
+  if (!form.inspector) {
+    toast.warning('请填写检验员')
+    return
+  }
+
+  if (isEditing.value) {
+    store.updatePreformInspection(editingId.value, { ...form })
+    toast.success('检验记录已更新')
+  } else {
+    store.addPreformInspection({ ...form })
+    toast.success('检验记录已创建')
+  }
+  showModal.value = false
+  resetForm()
+}
+
+const getQualifiedRate = (item: PreformInspection) => {
+  if (item.sampleCount === 0) return '0.0%'
+  return (item.qualifiedCount / item.sampleCount * 100).toFixed(1) + '%'
+}
 
 const filteredInspections = computed(() => {
   let result = store.preformInspections
@@ -230,22 +357,6 @@ const getPageNumbers = () => {
 
   return pages
 }
-
-const handleAdd = () => {
-  // TODO: 新增检验逻辑
-}
-
-const handleView = (item: PreformInspection) => {
-  // TODO: 查看详情逻辑
-}
-
-const handleEdit = (item: PreformInspection) => {
-  // TODO: 编辑逻辑
-}
-
-const handleDelete = (item: PreformInspection) => {
-  // TODO: 删除逻辑
-}
 </script>
 
 <template>
@@ -334,6 +445,7 @@ const handleDelete = (item: PreformInspection) => {
               <th class="px-4 py-3 text-left text-xs font-semibold text-slate-600 uppercase tracking-wider">供应商</th>
               <th class="px-4 py-3 text-center text-xs font-semibold text-slate-600 uppercase tracking-wider">抽样数</th>
               <th class="px-4 py-3 text-center text-xs font-semibold text-slate-600 uppercase tracking-wider">合格数</th>
+              <th class="px-4 py-3 text-center text-xs font-semibold text-slate-600 uppercase tracking-wider">合格率</th>
               <th class="px-4 py-3 text-center text-xs font-semibold text-slate-600 uppercase tracking-wider">平均重量(g)</th>
               <th class="px-4 py-3 text-center text-xs font-semibold text-slate-600 uppercase tracking-wider">外观</th>
               <th class="px-4 py-3 text-center text-xs font-semibold text-slate-600 uppercase tracking-wider">透明度</th>
@@ -377,6 +489,22 @@ const handleDelete = (item: PreformInspection) => {
                 </td>
                 <td class="px-4 py-4 text-center">
                   <span class="text-sm text-slate-600">{{ item.qualifiedCount }}</span>
+                </td>
+                <td class="px-4 py-4 text-center">
+                  <span
+                    :class="[
+                      'inline-flex items-center px-2 py-0.5 text-xs font-medium rounded-full',
+                      item.sampleCount > 0 && (item.qualifiedCount / item.sampleCount) >= 0.9
+                        ? 'bg-emerald-100 text-emerald-700'
+                        : item.sampleCount > 0 && (item.qualifiedCount / item.sampleCount) >= 0.7
+                          ? 'bg-amber-100 text-amber-700'
+                          : item.sampleCount > 0
+                            ? 'bg-red-100 text-red-700'
+                            : 'bg-gray-100 text-gray-700'
+                    ]"
+                  >
+                    {{ getQualifiedRate(item) }}
+                  </span>
                 </td>
                 <td class="px-4 py-4 text-center">
                   <span class="text-sm font-medium text-slate-700">{{ item.avgWeight }}</span>
@@ -433,7 +561,7 @@ const handleDelete = (item: PreformInspection) => {
                 </td>
               </tr>
               <tr v-if="isRowExpanded(item.id)" class="bg-slate-50">
-                <td colspan="13" class="px-4 py-4">
+                <td colspan="14" class="px-4 py-4">
                   <div class="pl-8">
                     <div class="bg-white rounded-lg p-4 border border-slate-200">
                       <h4 class="text-sm font-semibold text-slate-700 mb-3 flex items-center gap-2">
@@ -452,6 +580,16 @@ const handleDelete = (item: PreformInspection) => {
                         <div class="bg-cyan-50 rounded-lg p-3">
                           <p class="text-xs text-cyan-600 mb-1">平均重量</p>
                           <p class="text-lg font-bold text-cyan-700">{{ item.avgWeight }} <span class="text-sm font-normal text-cyan-500">g</span></p>
+                        </div>
+                      </div>
+                      <div class="grid grid-cols-1 md:grid-cols-2 gap-4 mt-4">
+                        <div class="bg-slate-50 rounded-lg p-3">
+                          <p class="text-xs text-slate-500 mb-1">检验员</p>
+                          <p class="text-sm font-medium text-slate-800">{{ item.inspector || '-' }}</p>
+                        </div>
+                        <div class="bg-slate-50 rounded-lg p-3">
+                          <p class="text-xs text-slate-500 mb-1">合格率</p>
+                          <p class="text-sm font-bold text-cyan-700">{{ getQualifiedRate(item) }}</p>
                         </div>
                       </div>
                       <div v-if="item.remark" class="mt-3 pt-3 border-t border-slate-100">
@@ -511,5 +649,221 @@ const handleDelete = (item: PreformInspection) => {
         </div>
       </div>
     </div>
+
+    <BaseModal
+      v-model:visible="showModal"
+      :title="isEditing ? '编辑检验记录' : '新增检验记录'"
+      width="680px"
+    >
+      <div class="space-y-4">
+        <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+          <div class="md:col-span-2">
+            <label class="block text-sm font-medium text-slate-700 mb-1">采购单 <span class="text-red-500">*</span></label>
+            <select
+              v-model="form.purchaseId"
+              class="w-full px-3 py-2.5 text-sm border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-cyan-500/20 focus:border-cyan-500 transition-colors bg-white"
+              :class="{ 'bg-slate-50': isEditing }"
+              :disabled="isEditing"
+            >
+              <option value="">请选择采购单</option>
+              <option
+                v-for="order in inspectingOrders"
+                :key="order.id"
+                :value="order.id"
+              >
+                {{ order.id }} - {{ order.spec }} ({{ order.supplierName }})
+              </option>
+            </select>
+          </div>
+
+          <div>
+            <label class="block text-sm font-medium text-slate-700 mb-1">规格</label>
+            <input
+              v-model="form.purchaseSpec"
+              type="text"
+              readonly
+              class="w-full px-3 py-2.5 text-sm border border-slate-200 rounded-lg bg-slate-50 text-slate-500"
+            />
+          </div>
+
+          <div>
+            <label class="block text-sm font-medium text-slate-700 mb-1">供应商</label>
+            <input
+              v-model="form.supplierName"
+              type="text"
+              readonly
+              class="w-full px-3 py-2.5 text-sm border border-slate-200 rounded-lg bg-slate-50 text-slate-500"
+            />
+          </div>
+
+          <div>
+            <label class="block text-sm font-medium text-slate-700 mb-1">抽样数 <span class="text-red-500">*</span></label>
+            <input
+              v-model.number="form.sampleCount"
+              type="number"
+              min="0"
+              class="w-full px-3 py-2.5 text-sm border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-cyan-500/20 focus:border-cyan-500 transition-colors"
+            />
+          </div>
+
+          <div>
+            <label class="block text-sm font-medium text-slate-700 mb-1">合格数 <span class="text-red-500">*</span></label>
+            <input
+              v-model.number="form.qualifiedCount"
+              type="number"
+              min="0"
+              :max="form.sampleCount"
+              class="w-full px-3 py-2.5 text-sm border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-cyan-500/20 focus:border-cyan-500 transition-colors"
+            />
+          </div>
+
+          <div>
+            <label class="block text-sm font-medium text-slate-700 mb-1">平均重量(g)</label>
+            <input
+              v-model.number="form.avgWeight"
+              type="number"
+              step="0.01"
+              class="w-full px-3 py-2.5 text-sm border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-cyan-500/20 focus:border-cyan-500 transition-colors"
+            />
+          </div>
+
+          <div>
+            <label class="block text-sm font-medium text-slate-700 mb-1">最小重量(g)</label>
+            <input
+              v-model.number="form.minWeight"
+              type="number"
+              step="0.01"
+              class="w-full px-3 py-2.5 text-sm border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-cyan-500/20 focus:border-cyan-500 transition-colors"
+            />
+          </div>
+
+          <div>
+            <label class="block text-sm font-medium text-slate-700 mb-1">最大重量(g)</label>
+            <input
+              v-model.number="form.maxWeight"
+              type="number"
+              step="0.01"
+              class="w-full px-3 py-2.5 text-sm border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-cyan-500/20 focus:border-cyan-500 transition-colors"
+            />
+          </div>
+
+          <div>
+            <label class="block text-sm font-medium text-slate-700 mb-1">外观结果</label>
+            <select
+              v-model="form.appearanceResult"
+              class="w-full px-3 py-2.5 text-sm border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-cyan-500/20 focus:border-cyan-500 transition-colors bg-white"
+            >
+              <option value="pass">通过</option>
+              <option value="fail">不通过</option>
+              <option value="pending">待检</option>
+            </select>
+          </div>
+
+          <div>
+            <label class="block text-sm font-medium text-slate-700 mb-1">透明度结果</label>
+            <select
+              v-model="form.transparencyResult"
+              class="w-full px-3 py-2.5 text-sm border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-cyan-500/20 focus:border-cyan-500 transition-colors bg-white"
+            >
+              <option value="pass">通过</option>
+              <option value="fail">不通过</option>
+              <option value="pending">待检</option>
+            </select>
+          </div>
+
+          <div>
+            <label class="block text-sm font-medium text-slate-700 mb-1">结论</label>
+            <select
+              v-model="form.conclusion"
+              class="w-full px-3 py-2.5 text-sm border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-cyan-500/20 focus:border-cyan-500 transition-colors bg-white"
+            >
+              <option value="qualified">合格</option>
+              <option value="unqualified">不合格</option>
+              <option value="pending">待检验</option>
+            </select>
+          </div>
+
+          <div>
+            <label class="block text-sm font-medium text-slate-700 mb-1">检验员 <span class="text-red-500">*</span></label>
+            <input
+              v-model="form.inspector"
+              type="text"
+              class="w-full px-3 py-2.5 text-sm border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-cyan-500/20 focus:border-cyan-500 transition-colors"
+              placeholder="请输入检验员姓名"
+            />
+          </div>
+
+          <div>
+            <label class="block text-sm font-medium text-slate-700 mb-1">检验日期</label>
+            <input
+              v-model="form.inspectDate"
+              type="date"
+              class="w-full px-3 py-2.5 text-sm border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-cyan-500/20 focus:border-cyan-500 transition-colors"
+            />
+          </div>
+
+          <div class="md:col-span-2">
+            <label class="block text-sm font-medium text-slate-700 mb-1">备注</label>
+            <textarea
+              v-model="form.remark"
+              rows="3"
+              class="w-full px-3 py-2.5 text-sm border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-cyan-500/20 focus:border-cyan-500 transition-colors resize-none"
+              placeholder="请输入备注信息"
+            ></textarea>
+          </div>
+        </div>
+      </div>
+
+      <template #footer>
+        <div class="flex justify-end gap-3">
+          <button
+            @click="showModal = false"
+            class="px-4 py-2 text-sm font-medium text-slate-700 bg-white border border-slate-300 rounded-lg hover:bg-slate-50 transition-colors"
+          >
+            取消
+          </button>
+          <button
+            @click="handleSave"
+            class="px-4 py-2 text-sm font-medium text-white bg-gradient-to-r from-cyan-500 to-blue-500 rounded-lg hover:from-cyan-600 hover:to-blue-600 transition-all shadow-sm"
+          >
+            {{ isEditing ? '更新' : '保存' }}
+          </button>
+        </div>
+      </template>
+    </BaseModal>
+
+    <BaseModal
+      v-model:visible="showDeleteConfirm"
+      title="确认删除"
+      width="420px"
+      :close-on-click-overlay="false"
+    >
+      <div class="flex items-start gap-4">
+        <div class="flex-shrink-0 w-10 h-10 rounded-full bg-red-100 flex items-center justify-center">
+          <AlertTriangle class="w-5 h-5 text-red-600" />
+        </div>
+        <div>
+          <p class="text-sm font-medium text-slate-800">确定要删除该检验记录吗？</p>
+          <p class="text-sm text-slate-500 mt-1">删除后数据将无法恢复，请确认操作。</p>
+        </div>
+      </div>
+
+      <template #footer>
+        <div class="flex justify-end gap-3">
+          <button
+            @click="showDeleteConfirm = false"
+            class="px-4 py-2 text-sm font-medium text-slate-700 bg-white border border-slate-300 rounded-lg hover:bg-slate-50 transition-colors"
+          >
+            取消
+          </button>
+          <button
+            @click="confirmDelete"
+            class="px-4 py-2 text-sm font-medium text-white bg-red-500 rounded-lg hover:bg-red-600 transition-colors"
+          >
+            确认删除
+          </button>
+        </div>
+      </template>
+    </BaseModal>
   </div>
 </template>

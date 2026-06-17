@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, computed } from 'vue'
+import { ref, reactive, computed, watch } from 'vue'
 import {
   Search,
   Plus,
@@ -13,12 +13,17 @@ import {
   Package,
   Building2,
   Phone,
-  MapPin
+  MapPin,
+  Truck,
+  ClipboardCheck
 } from 'lucide-vue-next'
 import { useAppStore } from '@/stores/app'
+import BaseModal from '@/components/Modal/BaseModal.vue'
+import { useToast } from '@/composables/useToast'
 import type { PurchaseOrder, Supplier } from '@/types'
 
 const store = useAppStore()
+const toast = useToast()
 
 const activeTab = ref<'orders' | 'suppliers'>('orders')
 
@@ -29,6 +34,43 @@ const dateRangeEnd = ref('')
 
 const currentPage = ref(1)
 const pageSize = ref(10)
+
+const showAddModal = ref(false)
+
+const form = reactive({
+  supplierId: '',
+  supplierName: '',
+  spec: '',
+  weight: 0,
+  quantity: 0,
+  unitPrice: 0,
+  totalAmount: 0,
+  orderDate: '',
+  expectedDate: '',
+  remark: ''
+})
+
+watch(() => form.supplierId, (id) => {
+  const s = store.suppliers.find(s => s.id === id)
+  if (s) form.supplierName = s.name
+})
+
+watch([() => form.quantity, () => form.unitPrice], () => {
+  form.totalAmount = Math.round(form.quantity * form.unitPrice * 100) / 100
+})
+
+const resetForm = () => {
+  form.supplierId = ''
+  form.supplierName = ''
+  form.spec = ''
+  form.weight = 0
+  form.quantity = 0
+  form.unitPrice = 0
+  form.totalAmount = 0
+  form.orderDate = ''
+  form.expectedDate = ''
+  form.remark = ''
+}
 
 const getStatusText = (status: PurchaseOrder['status']) => {
   const statusMap: Record<PurchaseOrder['status'], string> = {
@@ -117,21 +159,57 @@ const formatAmount = (amount: number) => {
   return amount.toLocaleString('zh-CN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
 }
 
+const handleAddOrder = () => {
+  resetForm()
+  showAddModal.value = true
+}
+
+const handleSaveOrder = () => {
+  if (!form.supplierId || !form.spec || !form.weight || !form.quantity) {
+    toast.warning('请填写必填项')
+    return
+  }
+  store.addPurchaseOrder({ ...form, status: 'pending', orderDate: new Date().toISOString().split('T')[0] })
+  toast.success('采购单创建成功')
+  showAddModal.value = false
+  resetForm()
+}
+
+const handleConfirmDelivery = (order: PurchaseOrder) => {
+  const result = store.deliverPurchaseOrder(order.id)
+  if (result) {
+    toast.success('已确认到货')
+  } else {
+    toast.error('确认到货失败')
+  }
+}
+
+const handleToInspection = (order: PurchaseOrder) => {
+  const inspection = store.createInspectionFromPurchase(order.id)
+  if (inspection) {
+    toast.success('已生成瓶坯检验待检任务')
+  } else {
+    toast.error('生成检验任务失败')
+  }
+}
+
+const handleDelete = (order: PurchaseOrder) => {
+  if (confirm(`确定要删除采购单 ${order.id} 吗？`)) {
+    const result = store.deletePurchaseOrder(order.id)
+    if (result) {
+      toast.success('删除成功')
+    } else {
+      toast.error('删除失败')
+    }
+  }
+}
+
 const handleView = (order: PurchaseOrder) => {
   console.log('查看订单:', order.id)
 }
 
 const handleEdit = (order: PurchaseOrder) => {
   console.log('编辑订单:', order.id)
-}
-
-const handleDelete = (order: PurchaseOrder) => {
-  if (confirm(`确定要删除采购单 ${order.id} 吗？`)) {
-    const index = store.purchaseOrders.findIndex(o => o.id === order.id)
-    if (index > -1) {
-      store.purchaseOrders.splice(index, 1)
-    }
-  }
 }
 
 const handleViewSupplier = (supplier: Supplier) => {
@@ -144,15 +222,13 @@ const handleEditSupplier = (supplier: Supplier) => {
 
 const handleDeleteSupplier = (supplier: Supplier) => {
   if (confirm(`确定要删除供应商 ${supplier.name} 吗？`)) {
-    const index = store.suppliers.findIndex(s => s.id === supplier.id)
-    if (index > -1) {
-      store.suppliers.splice(index, 1)
+    const result = store.deleteSupplier(supplier.id)
+    if (result) {
+      toast.success('供应商删除成功')
+    } else {
+      toast.error('供应商删除失败')
     }
   }
-}
-
-const handleAddOrder = () => {
-  console.log('新增采购单')
 }
 
 const handleAddSupplier = () => {
@@ -327,7 +403,25 @@ const goToPage = (page: number) => {
                   </span>
                 </td>
                 <td class="px-4 py-4">
-                  <div class="flex items-center justify-center gap-2">
+                  <div class="flex items-center justify-center gap-1">
+                    <button
+                      v-if="order.status === 'pending'"
+                      @click="handleConfirmDelivery(order)"
+                      class="flex items-center gap-1 px-2 py-1 text-xs font-medium text-blue-600 bg-blue-50 rounded-md hover:bg-blue-100 transition-colors"
+                      title="确认到货"
+                    >
+                      <Truck class="w-3.5 h-3.5" />
+                      确认到货
+                    </button>
+                    <button
+                      v-if="order.status === 'delivered'"
+                      @click="handleToInspection(order)"
+                      class="flex items-center gap-1 px-2 py-1 text-xs font-medium text-purple-600 bg-purple-50 rounded-md hover:bg-purple-100 transition-colors"
+                      title="转检验"
+                    >
+                      <ClipboardCheck class="w-3.5 h-3.5" />
+                      转检验
+                    </button>
                     <button
                       @click="handleView(order)"
                       class="p-1.5 text-slate-400 hover:text-cyan-600 hover:bg-cyan-50 rounded-lg transition-colors"
@@ -518,5 +612,116 @@ const goToPage = (page: number) => {
         </div>
       </div>
     </div>
+
+    <BaseModal v-model:visible="showAddModal" title="新增采购单" width="640px">
+      <div class="space-y-4">
+        <div class="grid grid-cols-2 gap-4">
+          <div>
+            <label class="block text-sm font-medium text-slate-700 mb-1.5">供应商 <span class="text-red-500">*</span></label>
+            <select
+              v-model="form.supplierId"
+              class="w-full px-3 py-2.5 border border-slate-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-cyan-500 focus:border-transparent bg-white"
+            >
+              <option value="">请选择供应商</option>
+              <option v-for="s in store.suppliers" :key="s.id" :value="s.id">{{ s.name }}</option>
+            </select>
+          </div>
+          <div>
+            <label class="block text-sm font-medium text-slate-700 mb-1.5">规格 <span class="text-red-500">*</span></label>
+            <input
+              v-model="form.spec"
+              type="text"
+              placeholder="如: 28mm PCO1810"
+              class="w-full px-3 py-2.5 border border-slate-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-cyan-500 focus:border-transparent"
+            />
+          </div>
+        </div>
+
+        <div class="grid grid-cols-2 gap-4">
+          <div>
+            <label class="block text-sm font-medium text-slate-700 mb-1.5">单重(g) <span class="text-red-500">*</span></label>
+            <input
+              v-model.number="form.weight"
+              type="number"
+              min="0"
+              step="0.01"
+              placeholder="请输入单重"
+              class="w-full px-3 py-2.5 border border-slate-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-cyan-500 focus:border-transparent"
+            />
+          </div>
+          <div>
+            <label class="block text-sm font-medium text-slate-700 mb-1.5">数量 <span class="text-red-500">*</span></label>
+            <input
+              v-model.number="form.quantity"
+              type="number"
+              min="0"
+              placeholder="请输入数量"
+              class="w-full px-3 py-2.5 border border-slate-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-cyan-500 focus:border-transparent"
+            />
+          </div>
+        </div>
+
+        <div class="grid grid-cols-2 gap-4">
+          <div>
+            <label class="block text-sm font-medium text-slate-700 mb-1.5">单价(元)</label>
+            <input
+              v-model.number="form.unitPrice"
+              type="number"
+              min="0"
+              step="0.01"
+              placeholder="请输入单价"
+              class="w-full px-3 py-2.5 border border-slate-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-cyan-500 focus:border-transparent"
+            />
+          </div>
+          <div>
+            <label class="block text-sm font-medium text-slate-700 mb-1.5">总金额(元)</label>
+            <input
+              :value="form.totalAmount"
+              type="text"
+              readonly
+              class="w-full px-3 py-2.5 border border-slate-200 rounded-lg text-sm bg-slate-50 text-slate-500 cursor-not-allowed"
+            />
+          </div>
+        </div>
+
+        <div class="grid grid-cols-2 gap-4">
+          <div>
+            <label class="block text-sm font-medium text-slate-700 mb-1.5">预计到货日期</label>
+            <input
+              v-model="form.expectedDate"
+              type="date"
+              class="w-full px-3 py-2.5 border border-slate-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-cyan-500 focus:border-transparent"
+            />
+          </div>
+        </div>
+
+        <div>
+          <label class="block text-sm font-medium text-slate-700 mb-1.5">备注</label>
+          <textarea
+            v-model="form.remark"
+            rows="3"
+            placeholder="请输入备注信息"
+            class="w-full px-3 py-2.5 border border-slate-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-cyan-500 focus:border-transparent resize-none"
+          ></textarea>
+        </div>
+      </div>
+
+      <template #footer>
+        <div class="flex justify-end gap-3">
+          <button
+            @click="showAddModal = false"
+            class="px-4 py-2.5 border border-slate-200 text-slate-600 rounded-lg text-sm hover:bg-slate-50 transition-colors"
+          >
+            取消
+          </button>
+          <button
+            @click="handleSaveOrder"
+            class="px-4 py-2.5 bg-gradient-to-r from-cyan-500 to-blue-500 text-white rounded-lg text-sm hover:from-cyan-600 hover:to-blue-600 transition-all shadow-sm font-medium"
+          >
+            保存
+          </button>
+        </div>
+      </template>
+    </BaseModal>
   </div>
 </template>

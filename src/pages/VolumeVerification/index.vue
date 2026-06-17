@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, computed } from 'vue'
+import { ref, reactive, computed } from 'vue'
 import {
   Search,
   Plus,
@@ -19,8 +19,11 @@ import {
 } from 'lucide-vue-next'
 import { useAppStore } from '@/stores/app'
 import type { VolumeCheck } from '@/types'
+import BaseModal from '@/components/Modal/BaseModal.vue'
+import { useToast } from '@/composables/useToast'
 
 const store = useAppStore()
+const toast = useToast()
 
 const searchKeyword = ref('')
 const conclusionFilter = ref('')
@@ -30,7 +33,34 @@ const pageSize = ref(10)
 const expandedRows = ref<string[]>([])
 
 const today = '2026-06-17'
+const standardVolume = 500
 const standardVolumeDeviation = 5
+
+const showModal = ref(false)
+const editingId = ref<string | null>(null)
+
+const defaultForm = () => ({
+  productSpec: '',
+  sampleCount: 0,
+  qualifiedCount: 0,
+  avgVolume: 0,
+  minVolume: 0,
+  maxVolume: 0,
+  bottomThickness: 0,
+  sealResult: 'pending' as 'pass' | 'fail' | 'pending',
+  conclusion: 'pending' as 'qualified' | 'unqualified' | 'pending',
+  inspector: '',
+  remark: ''
+})
+
+const form = reactive(defaultForm())
+
+const resetForm = () => {
+  Object.assign(form, defaultForm())
+  editingId.value = null
+}
+
+const modalTitle = computed(() => editingId.value ? '编辑容量校验' : '新增容量校验')
 
 const filteredChecks = computed(() => {
   let result = store.volumeChecks
@@ -179,20 +209,19 @@ const getSealText = (result: string) => {
   }
 }
 
-const getVolumeDeviationColor = (avgVolume: number, productSpec: string) => {
-  const match = productSpec.match(/(\d+)\s*ml/i)
-  if (!match) return 'text-slate-700'
-  const standardVolume = parseFloat(match[1])
-  const deviation = Math.abs(avgVolume - standardVolume)
-  return deviation <= standardVolumeDeviation ? 'text-emerald-600' : 'text-red-600'
+const getQualifiedRate = (item: VolumeCheck) => {
+  if (item.sampleCount === 0) return '0.0%'
+  return (item.qualifiedCount / item.sampleCount * 100).toFixed(1) + '%'
 }
 
-const getVolumeDeviation = (avgVolume: number, productSpec: string) => {
-  const match = productSpec.match(/(\d+)\s*ml/i)
-  if (!match) return '0.0'
-  const standardVolume = parseFloat(match[1])
+const getVolumeDeviation = (avgVolume: number) => {
   const deviation = avgVolume - standardVolume
   return deviation >= 0 ? `+${deviation.toFixed(1)}` : deviation.toFixed(1)
+}
+
+const getVolumeDeviationColor = (avgVolume: number) => {
+  const deviation = Math.abs(avgVolume - standardVolume)
+  return deviation <= standardVolumeDeviation ? 'text-emerald-600' : 'text-red-600'
 }
 
 const toggleRowExpand = (id: string) => {
@@ -249,19 +278,79 @@ const getPageNumbers = () => {
 }
 
 const handleAdd = () => {
-  // TODO: 新增校验逻辑
+  resetForm()
+  showModal.value = true
 }
 
 const handleView = (item: VolumeCheck) => {
-  // TODO: 查看详情逻辑
+  resetForm()
+  editingId.value = item.id
+  Object.assign(form, {
+    productSpec: item.productSpec,
+    sampleCount: item.sampleCount,
+    qualifiedCount: item.qualifiedCount,
+    avgVolume: item.avgVolume,
+    minVolume: item.minVolume,
+    maxVolume: item.maxVolume,
+    bottomThickness: item.bottomThickness,
+    sealResult: item.sealResult,
+    conclusion: item.conclusion,
+    inspector: item.inspector,
+    remark: item.remark
+  })
+  showModal.value = true
 }
 
 const handleEdit = (item: VolumeCheck) => {
-  // TODO: 编辑逻辑
+  editingId.value = item.id
+  Object.assign(form, {
+    productSpec: item.productSpec,
+    sampleCount: item.sampleCount,
+    qualifiedCount: item.qualifiedCount,
+    avgVolume: item.avgVolume,
+    minVolume: item.minVolume,
+    maxVolume: item.maxVolume,
+    bottomThickness: item.bottomThickness,
+    sealResult: item.sealResult,
+    conclusion: item.conclusion,
+    inspector: item.inspector,
+    remark: item.remark
+  })
+  showModal.value = true
 }
 
 const handleDelete = (item: VolumeCheck) => {
-  // TODO: 删除逻辑
+  if (confirm(`确定要删除校验单 ${item.id} 吗？`)) {
+    store.deleteVolumeCheck(item.id)
+    toast.success('校验记录已删除')
+  }
+}
+
+const handleSave = () => {
+  if (!form.productSpec || !form.inspector) {
+    toast.warning('请填写必填字段')
+    return
+  }
+
+  if (editingId.value) {
+    store.updateVolumeCheck(editingId.value, { ...form })
+    toast.success('校验记录已更新')
+  } else {
+    store.addVolumeCheck({
+      ...form,
+      bottleInspectionId: '',
+      checkDate: new Date().toISOString().split('T')[0]
+    })
+    toast.success('校验记录已添加')
+  }
+
+  showModal.value = false
+  resetForm()
+}
+
+const handleModalClose = () => {
+  showModal.value = false
+  resetForm()
 }
 </script>
 
@@ -349,6 +438,7 @@ const handleDelete = (item: VolumeCheck) => {
               <th class="px-4 py-3 text-left text-xs font-semibold text-slate-600 uppercase tracking-wider">产品规格</th>
               <th class="px-4 py-3 text-center text-xs font-semibold text-slate-600 uppercase tracking-wider">抽样数</th>
               <th class="px-4 py-3 text-center text-xs font-semibold text-slate-600 uppercase tracking-wider">合格数</th>
+              <th class="px-4 py-3 text-center text-xs font-semibold text-slate-600 uppercase tracking-wider">合格率</th>
               <th class="px-4 py-3 text-center text-xs font-semibold text-slate-600 uppercase tracking-wider">平均容量(ml)</th>
               <th class="px-4 py-3 text-center text-xs font-semibold text-slate-600 uppercase tracking-wider">容量偏差</th>
               <th class="px-4 py-3 text-center text-xs font-semibold text-slate-600 uppercase tracking-wider">瓶底厚度(mm)</th>
@@ -389,11 +479,14 @@ const handleDelete = (item: VolumeCheck) => {
                   <span class="text-sm text-slate-600">{{ item.qualifiedCount }}</span>
                 </td>
                 <td class="px-4 py-4 text-center">
+                  <span class="text-sm font-semibold text-cyan-600">{{ getQualifiedRate(item) }}</span>
+                </td>
+                <td class="px-4 py-4 text-center">
                   <span class="text-sm font-medium text-slate-700">{{ item.avgVolume }}</span>
                 </td>
                 <td class="px-4 py-4 text-center">
-                  <span :class="['text-sm font-semibold', getVolumeDeviationColor(item.avgVolume, item.productSpec)]">
-                    {{ getVolumeDeviation(item.avgVolume, item.productSpec) }} ml
+                  <span :class="['text-sm font-semibold', getVolumeDeviationColor(item.avgVolume)]">
+                    {{ getVolumeDeviation(item.avgVolume) }} ml
                   </span>
                 </td>
                 <td class="px-4 py-4 text-center">
@@ -449,7 +542,7 @@ const handleDelete = (item: VolumeCheck) => {
                 </td>
               </tr>
               <tr v-if="isRowExpanded(item.id)" class="bg-slate-50">
-                <td colspan="12" class="px-4 py-4">
+                <td colspan="13" class="px-4 py-4">
                   <div class="pl-8">
                     <div class="bg-white rounded-lg p-4 border border-slate-200">
                       <h4 class="text-sm font-semibold text-slate-700 mb-3 flex items-center gap-2">
@@ -470,18 +563,18 @@ const handleDelete = (item: VolumeCheck) => {
                           <p class="text-lg font-bold text-cyan-700">{{ item.avgVolume }} <span class="text-sm font-normal text-cyan-500">ml</span></p>
                         </div>
                       </div>
-                      <h4 class="text-sm font-semibold text-slate-700 mb-3 flex items-center gap-2">
-                        <Ruler class="w-4 h-4 text-purple-500" />
-                        瓶底厚度详情
-                      </h4>
-                      <div class="grid grid-cols-1 md:grid-cols-1 gap-4 mb-4">
+                      <div class="grid grid-cols-1 md:grid-cols-2 gap-4 mb-4">
                         <div class="bg-purple-50 rounded-lg p-3">
                           <p class="text-xs text-purple-600 mb-1">瓶底厚度</p>
                           <p class="text-lg font-bold text-purple-700">{{ item.bottomThickness }} <span class="text-sm font-normal text-purple-500">mm</span></p>
                         </div>
+                        <div class="bg-slate-50 rounded-lg p-3">
+                          <p class="text-xs text-slate-500 mb-1">合格率</p>
+                          <p class="text-lg font-bold text-emerald-600">{{ getQualifiedRate(item) }}</p>
+                        </div>
                       </div>
                       <div v-if="item.remark" class="pt-3 border-t border-slate-100">
-                        <p class="text-xs text-slate-500 mb-1">测试备注</p>
+                        <p class="text-xs text-slate-500 mb-1">备注</p>
                         <p class="text-sm text-slate-600">{{ item.remark }}</p>
                       </div>
                     </div>
@@ -537,5 +630,158 @@ const handleDelete = (item: VolumeCheck) => {
         </div>
       </div>
     </div>
+
+    <BaseModal
+      v-model:visible="showModal"
+      :title="modalTitle"
+      width="680px"
+      @close="handleModalClose"
+    >
+      <div class="space-y-4">
+        <div>
+          <label class="block text-sm font-medium text-slate-700 mb-1">产品规格 <span class="text-red-500">*</span></label>
+          <input
+            v-model="form.productSpec"
+            type="text"
+            placeholder="请输入产品规格"
+            class="w-full px-3 py-2 text-sm border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-cyan-500/20 focus:border-cyan-500 transition-colors"
+          />
+        </div>
+
+        <div class="grid grid-cols-2 gap-4">
+          <div>
+            <label class="block text-sm font-medium text-slate-700 mb-1">抽样数</label>
+            <input
+              v-model.number="form.sampleCount"
+              type="number"
+              min="0"
+              placeholder="请输入抽样数"
+              class="w-full px-3 py-2 text-sm border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-cyan-500/20 focus:border-cyan-500 transition-colors"
+            />
+          </div>
+          <div>
+            <label class="block text-sm font-medium text-slate-700 mb-1">合格数</label>
+            <input
+              v-model.number="form.qualifiedCount"
+              type="number"
+              min="0"
+              placeholder="请输入合格数"
+              class="w-full px-3 py-2 text-sm border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-cyan-500/20 focus:border-cyan-500 transition-colors"
+            />
+          </div>
+        </div>
+
+        <div class="grid grid-cols-3 gap-4">
+          <div>
+            <label class="block text-sm font-medium text-slate-700 mb-1">平均容量(ml)</label>
+            <input
+              v-model.number="form.avgVolume"
+              type="number"
+              step="0.1"
+              min="0"
+              placeholder="平均容量"
+              class="w-full px-3 py-2 text-sm border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-cyan-500/20 focus:border-cyan-500 transition-colors"
+            />
+          </div>
+          <div>
+            <label class="block text-sm font-medium text-slate-700 mb-1">最小容量(ml)</label>
+            <input
+              v-model.number="form.minVolume"
+              type="number"
+              step="0.1"
+              min="0"
+              placeholder="最小容量"
+              class="w-full px-3 py-2 text-sm border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-cyan-500/20 focus:border-cyan-500 transition-colors"
+            />
+          </div>
+          <div>
+            <label class="block text-sm font-medium text-slate-700 mb-1">最大容量(ml)</label>
+            <input
+              v-model.number="form.maxVolume"
+              type="number"
+              step="0.1"
+              min="0"
+              placeholder="最大容量"
+              class="w-full px-3 py-2 text-sm border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-cyan-500/20 focus:border-cyan-500 transition-colors"
+            />
+          </div>
+        </div>
+
+        <div class="grid grid-cols-2 gap-4">
+          <div>
+            <label class="block text-sm font-medium text-slate-700 mb-1">瓶底厚度(mm)</label>
+            <input
+              v-model.number="form.bottomThickness"
+              type="number"
+              step="0.01"
+              min="0"
+              placeholder="请输入瓶底厚度"
+              class="w-full px-3 py-2 text-sm border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-cyan-500/20 focus:border-cyan-500 transition-colors"
+            />
+          </div>
+          <div>
+            <label class="block text-sm font-medium text-slate-700 mb-1">密封性</label>
+            <select
+              v-model="form.sealResult"
+              class="w-full px-3 py-2 text-sm border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-cyan-500/20 focus:border-cyan-500 transition-colors bg-white"
+            >
+              <option value="pass">通过</option>
+              <option value="fail">不通过</option>
+              <option value="pending">待检</option>
+            </select>
+          </div>
+        </div>
+
+        <div class="grid grid-cols-2 gap-4">
+          <div>
+            <label class="block text-sm font-medium text-slate-700 mb-1">结论</label>
+            <select
+              v-model="form.conclusion"
+              class="w-full px-3 py-2 text-sm border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-cyan-500/20 focus:border-cyan-500 transition-colors bg-white"
+            >
+              <option value="qualified">合格</option>
+              <option value="unqualified">不合格</option>
+              <option value="pending">待校验</option>
+            </select>
+          </div>
+          <div>
+            <label class="block text-sm font-medium text-slate-700 mb-1">检验员 <span class="text-red-500">*</span></label>
+            <input
+              v-model="form.inspector"
+              type="text"
+              placeholder="请输入检验员"
+              class="w-full px-3 py-2 text-sm border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-cyan-500/20 focus:border-cyan-500 transition-colors"
+            />
+          </div>
+        </div>
+
+        <div>
+          <label class="block text-sm font-medium text-slate-700 mb-1">备注</label>
+          <textarea
+            v-model="form.remark"
+            rows="3"
+            placeholder="请输入备注信息"
+            class="w-full px-3 py-2 text-sm border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-cyan-500/20 focus:border-cyan-500 transition-colors resize-none"
+          ></textarea>
+        </div>
+      </div>
+
+      <template #footer>
+        <div class="flex justify-end gap-3">
+          <button
+            @click="handleModalClose"
+            class="px-4 py-2 text-sm font-medium text-slate-700 bg-white border border-slate-200 rounded-lg hover:bg-slate-50 transition-colors"
+          >
+            取消
+          </button>
+          <button
+            @click="handleSave"
+            class="px-4 py-2 text-sm font-medium text-white bg-gradient-to-r from-cyan-500 to-blue-500 rounded-lg hover:from-cyan-600 hover:to-blue-600 transition-all shadow-sm"
+          >
+            {{ editingId ? '保存修改' : '确认添加' }}
+          </button>
+        </div>
+      </template>
+    </BaseModal>
   </div>
 </template>
