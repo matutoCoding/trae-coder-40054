@@ -20,12 +20,15 @@ import {
   CheckCircle,
   RotateCcw,
   Edit,
-  Search
+  Search,
+  ChevronDown,
+  ChevronUp
 } from 'lucide-vue-next'
 import { useAppStore } from '@/stores/app'
 import type { BlowMoldingRecord } from '@/types'
 import BaseModal from '@/components/Modal/BaseModal.vue'
 import { useToast } from '@/composables/useToast'
+import TraceabilityView from '@/components/Traceability/TraceabilityView.vue'
 
 const store = useAppStore()
 const toast = useToast()
@@ -35,6 +38,7 @@ const currentPage = ref(1)
 const pageSize = ref(5)
 const searchKeyword = ref('')
 const statusFilter = ref('')
+const expandedRows = ref<string[]>([])
 
 const chartRef = ref<HTMLElement>()
 let chart: echarts.ECharts | null = null
@@ -285,6 +289,19 @@ const handleDelete = () => {
   store.deleteBlowMoldingRecord(deleteTargetId.value)
   showDeleteConfirmModal.value = false
   toast.success('记录已删除')
+}
+
+const toggleRowExpand = (id: string) => {
+  const index = expandedRows.value.indexOf(id)
+  if (index > -1) {
+    expandedRows.value.splice(index, 1)
+  } else {
+    expandedRows.value.push(id)
+  }
+}
+
+const isRowExpanded = (id: string) => {
+  return expandedRows.value.includes(id)
 }
 
 const initChart = () => {
@@ -635,6 +652,7 @@ onBeforeUnmount(() => {
           <table class="w-full">
             <thead>
               <tr class="border-b border-slate-100">
+                <th class="text-left py-3 px-4 text-xs font-medium text-slate-500 uppercase tracking-wider w-10"></th>
                 <th class="text-left py-3 px-4 text-xs font-medium text-slate-500 uppercase tracking-wider">记录编号</th>
                 <th class="text-left py-3 px-4 text-xs font-medium text-slate-500 uppercase tracking-wider">机台号</th>
                 <th class="text-left py-3 px-4 text-xs font-medium text-slate-500 uppercase tracking-wider">模具号</th>
@@ -649,12 +667,24 @@ onBeforeUnmount(() => {
               </tr>
             </thead>
             <tbody class="divide-y divide-slate-50">
-              <tr
-                v-for="record in paginatedRecords"
-                :key="record.id"
-                class="hover:bg-slate-50 transition-colors"
-              >
-                <td class="py-3 px-4 text-sm font-medium text-slate-800">{{ record.id }}</td>
+              <template v-for="record in paginatedRecords" :key="record.id">
+                <tr class="hover:bg-slate-50 transition-colors">
+                  <td class="py-3 px-4">
+                    <button
+                      @click="toggleRowExpand(record.id)"
+                      class="p-1 rounded hover:bg-slate-200 transition-colors"
+                    >
+                      <ChevronDown
+                        v-if="!isRowExpanded(record.id)"
+                        class="w-4 h-4 text-slate-400"
+                      />
+                      <ChevronUp
+                        v-else
+                        class="w-4 h-4 text-slate-400"
+                      />
+                    </button>
+                  </td>
+                  <td class="py-3 px-4 text-sm font-medium text-slate-800">{{ record.id }}</td>
                 <td class="py-3 px-4 text-sm text-slate-600">{{ record.machineNo }}</td>
                 <td class="py-3 px-4 text-sm text-slate-600">{{ record.moldNo }}</td>
                 <td class="py-3 px-4 text-sm text-slate-600">{{ record.productSpec }}</td>
@@ -717,6 +747,60 @@ onBeforeUnmount(() => {
                   </div>
                 </td>
               </tr>
+              <tr v-if="isRowExpanded(record.id)" class="bg-slate-50">
+                <td colspan="12" class="px-4 py-4">
+                  <div class="pl-8">
+                    <div class="bg-white rounded-lg p-4 border border-slate-200">
+                      <h4 class="text-sm font-semibold text-slate-700 mb-3 flex items-center gap-2">
+                        <Gauge class="w-4 h-4 text-cyan-500" />
+                        生产详情
+                      </h4>
+                      <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+                        <div class="bg-slate-50 rounded-lg p-3">
+                          <p class="text-xs text-slate-500 mb-1">开始时间</p>
+                          <p class="text-sm font-medium text-slate-800">{{ record.startTime || '-' }}</p>
+                        </div>
+                        <div class="bg-slate-50 rounded-lg p-3">
+                          <p class="text-xs text-slate-500 mb-1">结束时间</p>
+                          <p class="text-sm font-medium text-slate-800">{{ record.endTime || '-' }}</p>
+                        </div>
+                        <div class="bg-slate-50 rounded-lg p-3">
+                          <p class="text-xs text-slate-500 mb-1">操作员</p>
+                          <p class="text-sm font-medium text-slate-800">{{ record.operator || '-' }}</p>
+                        </div>
+                        <div class="bg-cyan-50 rounded-lg p-3">
+                          <p class="text-xs text-cyan-600 mb-1">状态</p>
+                          <span :class="[getStatusColor(record.status), 'text-xs px-2.5 py-1 rounded-full border font-medium']">
+                            {{ getStatusText(record.status) }}
+                          </span>
+                        </div>
+                      </div>
+                      <div class="grid grid-cols-1 md:grid-cols-3 gap-4 mt-4">
+                        <div class="bg-slate-50 rounded-lg p-3">
+                          <p class="text-xs text-slate-500 mb-1">总产量</p>
+                          <p class="text-lg font-bold text-slate-800">{{ record.output.toLocaleString() }} <span class="text-sm font-normal text-slate-500">只</span></p>
+                        </div>
+                        <div class="bg-red-50 rounded-lg p-3">
+                          <p class="text-xs text-red-600 mb-1">不良数</p>
+                          <p class="text-lg font-bold text-red-700">{{ record.defectCount }} <span class="text-sm font-normal text-red-500">只</span></p>
+                        </div>
+                        <div class="bg-emerald-50 rounded-lg p-3">
+                          <p class="text-xs text-emerald-600 mb-1">合格率</p>
+                          <p class="text-lg font-bold text-emerald-700">{{ record.output > 0 ? (((record.output - record.defectCount) / record.output) * 100).toFixed(1) : '0.0' }} <span class="text-sm font-normal text-emerald-500">%</span></p>
+                        </div>
+                      </div>
+                      <div v-if="record.remark" class="mt-3 pt-3 border-t border-slate-100">
+                        <p class="text-xs text-slate-500 mb-1">备注</p>
+                        <p class="text-sm text-slate-600">{{ record.remark }}</p>
+                      </div>
+                      <div class="mt-4 pt-4 border-t border-slate-100">
+                        <TraceabilityView type="blowMolding" :id="record.id" />
+                      </div>
+                    </div>
+                  </div>
+                </td>
+              </tr>
+              </template>
             </tbody>
           </table>
         </div>

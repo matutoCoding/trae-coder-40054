@@ -22,6 +22,7 @@ import { useAppStore } from '@/stores/app'
 import { useToast } from '@/composables/useToast'
 import BaseModal from '@/components/Modal/BaseModal.vue'
 import type { PreformInspection } from '@/types'
+import TraceabilityView from '@/components/Traceability/TraceabilityView.vue'
 
 const store = useAppStore()
 const toast = useToast()
@@ -595,6 +596,9 @@ const getPageNumbers = () => {
                       <div v-if="item.remark" class="mt-3 pt-3 border-t border-slate-100">
                         <p class="text-xs text-slate-500 mb-1">备注</p>
                         <p class="text-sm text-slate-600">{{ item.remark }}</p>
+                      </div>
+                      <div class="mt-4 pt-4 border-t border-slate-100">
+                        <TraceabilityView type="preformInspection" :id="item.id" />
                       </div>
                     </div>
                   </div>

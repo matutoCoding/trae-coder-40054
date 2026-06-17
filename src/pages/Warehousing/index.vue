@@ -13,17 +13,24 @@ import {
   Boxes,
   Layers,
   AlertTriangle,
-  DollarSign
+  DollarSign,
+  TrendingUp,
+  TrendingDown,
+  RefreshCw,
+  Plus,
+  ChevronDown,
+  ChevronUp
 } from 'lucide-vue-next'
 import { useAppStore } from '@/stores/app'
 import BaseModal from '@/components/Modal/BaseModal.vue'
 import { useToast } from '@/composables/useToast'
 import type { InventoryItem, WarehouseRecord } from '@/types'
+import TraceabilityView from '@/components/Traceability/TraceabilityView.vue'
 
 const store = useAppStore()
 const toast = useToast()
 
-const activeTab = ref<'inventory' | 'records'>('inventory')
+const activeTab = ref<'inventory' | 'records' | 'flow'>('inventory')
 
 const inventorySearch = ref('')
 const inventoryStatusFilter = ref('')
@@ -33,8 +40,13 @@ const recordTypeFilter = ref('')
 const dateRangeStart = ref('')
 const dateRangeEnd = ref('')
 
+const specFilter = ref('')
+const flowDateStart = ref('')
+const flowDateEnd = ref('')
+
 const currentPage = ref(1)
 const pageSize = ref(10)
+const expandedRows = ref<string[]>([])
 
 const showStockInModal = ref(false)
 const showStockOutModal = ref(false)
@@ -165,7 +177,9 @@ const paginatedRecords = computed(() => {
 const totalPages = computed(() => {
   const total = activeTab.value === 'inventory'
     ? filteredInventory.value.length
-    : filteredRecords.value.length
+    : activeTab.value === 'records'
+    ? filteredRecords.value.length
+    : inventoryFlowData.value.length
   return Math.ceil(total / pageSize.value) || 1
 })
 
@@ -268,13 +282,146 @@ const resetRecordFilters = () => {
   currentPage.value = 1
 }
 
+interface InventoryFlowItem {
+  date: string
+  spec: string
+  opening: number
+  inQuantity: number
+  outQuantity: number
+  closing: number
+  remark: string
+}
+
+const inventoryFlowData = computed<InventoryFlowItem[]>(() => {
+  const allRecords = [...store.warehouseRecords]
+  
+  let filtered = allRecords
+  if (flowDateStart.value) {
+    filtered = filtered.filter(r => r.date >= flowDateStart.value)
+  }
+  if (flowDateEnd.value) {
+    filtered = filtered.filter(r => r.date <= flowDateEnd.value)
+  }
+  if (specFilter.value) {
+    filtered = filtered.filter(r => r.spec === specFilter.value)
+  }
+  
+  const dateSpecMap = new Map<string, { inQty: number; outQty: number; remarks: string[] }>()
+  const allDatesSet = new Set<string>()
+  const allSpecsSet = new Set<string>()
+  
+  filtered.forEach(record => {
+    allDatesSet.add(record.date)
+    allSpecsSet.add(record.spec)
+    const key = `${record.date}|${record.spec}`
+    if (!dateSpecMap.has(key)) {
+      dateSpecMap.set(key, { inQty: 0, outQty: 0, remarks: [] })
+    }
+    const data = dateSpecMap.get(key)!
+    if (record.type === 'in') {
+      data.inQty += record.quantity
+    } else {
+      data.outQty += record.quantity
+    }
+    if (record.remark) {
+      data.remarks.push(record.remark)
+    }
+  })
+  
+  const allDates = Array.from(allDatesSet).sort()
+  const allSpecs = specFilter.value ? [specFilter.value] : Array.from(allSpecsSet)
+  
+  const result: InventoryFlowItem[] = []
+  
+  allSpecs.forEach(spec => {
+    const specOpeningMap = new Map<string, number>()
+    let runningBalance = 0
+    
+    const specAllRecords = allRecords.filter(r => r.spec === spec)
+    if (allDates.length > 0) {
+      const firstDate = allDates[0]
+      const beforeRecords = specAllRecords.filter(r => r.date < firstDate)
+      beforeRecords.forEach(r => {
+        if (r.type === 'in') {
+          runningBalance += r.quantity
+        } else {
+          runningBalance -= r.quantity
+        }
+      })
+    }
+    
+    allDates.forEach(date => {
+      const key = `${date}|${spec}`
+      const data = dateSpecMap.get(key) || { inQty: 0, outQty: 0, remarks: [] }
+      
+      const opening = runningBalance
+      const closing = opening + data.inQty - data.outQty
+      
+      result.push({
+        date,
+        spec,
+        opening,
+        inQuantity: data.inQty,
+        outQuantity: data.outQty,
+        closing,
+        remark: data.remarks.join('; ')
+      })
+      
+      runningBalance = closing
+    })
+  })
+  
+  result.sort((a, b) => {
+    if (a.date !== b.date) {
+      return a.date.localeCompare(b.date)
+    }
+    return a.spec.localeCompare(b.spec)
+  })
+  
+  return result
+})
+
+const paginatedFlow = computed(() => {
+  const start = (currentPage.value - 1) * pageSize.value
+  const end = start + pageSize.value
+  return inventoryFlowData.value.slice(start, end)
+})
+
+const flowSummary = computed(() => {
+  const data = inventoryFlowData.value
+  const totalIn = data.reduce((sum, item) => sum + item.inQuantity, 0)
+  const totalOut = data.reduce((sum, item) => sum + item.outQuantity, 0)
+  const finalClosing = data.length > 0 ? data[data.length - 1].closing : 0
+  return { totalIn, totalOut, finalClosing }
+})
+
+const resetFlowFilters = () => {
+  specFilter.value = ''
+  flowDateStart.value = ''
+  flowDateEnd.value = ''
+  currentPage.value = 1
+}
+
 const goToPage = (page: number) => {
   if (page >= 1 && page <= totalPages.value) {
     currentPage.value = page
   }
 }
 
-const handleTabChange = (tab: 'inventory' | 'records') => {
+const toggleRowExpand = (id: string) => {
+  const index = expandedRows.value.indexOf(id)
+  if (index > -1) {
+    expandedRows.value.splice(index, 1)
+  } else {
+    expandedRows.value.push(id)
+  }
+}
+
+const isRowExpanded = (id: string) => {
+  return expandedRows.value.includes(id)
+}
+
+const handleTabChange = (tab: 'inventory' | 'records' | 'flow') => {
   activeTab.value = tab
   currentPage.value = 1
 }
@@ -330,6 +477,18 @@ const handleTabChange = (tab: 'inventory' | 'records') => {
         >
           <ListTodo class="w-4 h-4" />
           出入库记录
+        </button>
+        <button
+          @click="handleTabChange('flow')"
+          :class="[
+            'flex items-center gap-2 px-6 py-3 text-sm font-medium border-b-2 transition-colors -mb-px',
+            activeTab === 'flow'
+              ? 'border-cyan-500 text-cyan-600'
+              : 'border-transparent text-slate-500 hover:text-slate-700'
+          ]"
+        >
+          <TrendingUp class="w-4 h-4" />
+          库存流水
         </button>
       </div>
 
@@ -549,7 +708,7 @@ const handleTabChange = (tab: 'inventory' | 'records') => {
         </div>
       </div>
 
-      <div v-else class="space-y-4">
+      <div v-else-if="activeTab === 'records'" class="space-y-4">
         <div class="flex flex-wrap items-center gap-4">
           <div class="relative flex-1 min-w-64">
             <Search class="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
@@ -600,6 +759,7 @@ const handleTabChange = (tab: 'inventory' | 'records') => {
           <table class="w-full">
             <thead>
               <tr class="bg-slate-50">
+                <th class="px-4 py-3 text-left text-xs font-semibold text-slate-600 uppercase tracking-wider w-10"></th>
                 <th class="px-4 py-3 text-left text-xs font-semibold text-slate-600 uppercase tracking-wider">单据号</th>
                 <th class="px-4 py-3 text-center text-xs font-semibold text-slate-600 uppercase tracking-wider">类型</th>
                 <th class="px-4 py-3 text-left text-xs font-semibold text-slate-600 uppercase tracking-wider">规格</th>
@@ -612,13 +772,25 @@ const handleTabChange = (tab: 'inventory' | 'records') => {
               </tr>
             </thead>
             <tbody class="divide-y divide-slate-200">
-              <tr
-                v-for="record in paginatedRecords"
-                :key="record.id"
-                class="hover:bg-slate-50 transition-colors"
-              >
-                <td class="px-4 py-4">
-                  <span class="text-sm font-medium text-slate-800">{{ record.id }}</span>
+              <template v-for="record in paginatedRecords" :key="record.id">
+                <tr class="hover:bg-slate-50 transition-colors">
+                  <td class="px-4 py-4">
+                    <button
+                      @click="toggleRowExpand(record.id)"
+                      class="p-1 rounded hover:bg-slate-200 transition-colors"
+                    >
+                      <ChevronDown
+                        v-if="!isRowExpanded(record.id)"
+                        class="w-4 h-4 text-slate-400"
+                      />
+                      <ChevronUp
+                        v-else
+                        class="w-4 h-4 text-slate-400"
+                      />
+                    </button>
+                  </td>
+                  <td class="px-4 py-4">
+                    <span class="text-sm font-medium text-slate-800">{{ record.id }}</span>
                 </td>
                 <td class="px-4 py-4 text-center">
                   <span
@@ -649,8 +821,62 @@ const handleTabChange = (tab: 'inventory' | 'records') => {
                   <span class="text-sm text-slate-500">{{ record.date }}</span>
                 </td>
               </tr>
+              <tr v-if="isRowExpanded(record.id)" class="bg-slate-50">
+                <td colspan="10" class="px-4 py-4">
+                  <div class="pl-8">
+                    <div class="bg-white rounded-lg p-4 border border-slate-200">
+                      <h4 class="text-sm font-semibold text-slate-700 mb-3 flex items-center gap-2">
+                        <ListTodo class="w-4 h-4 text-cyan-500" />
+                        出入库详情
+                      </h4>
+                      <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+                        <div class="bg-slate-50 rounded-lg p-3">
+                          <p class="text-xs text-slate-500 mb-1">单据号</p>
+                          <p class="text-sm font-medium text-slate-800">{{ record.id }}</p>
+                        </div>
+                        <div class="bg-slate-50 rounded-lg p-3">
+                          <p class="text-xs text-slate-500 mb-1">类型</p>
+                          <span :class="[getRecordTypeClass(record.type), 'text-xs px-2.5 py-1 rounded-full font-medium']">
+                            {{ getRecordTypeText(record.type) }}
+                          </span>
+                        </div>
+                        <div class="bg-slate-50 rounded-lg p-3">
+                          <p class="text-xs text-slate-500 mb-1">规格</p>
+                          <p class="text-sm font-medium text-slate-800">{{ record.spec }}</p>
+                        </div>
+                        <div class="bg-slate-50 rounded-lg p-3">
+                          <p class="text-xs text-slate-500 mb-1">数量</p>
+                          <p class="text-sm font-medium text-slate-800">{{ formatNumber(record.quantity) }} {{ record.unit }}</p>
+                        </div>
+                      </div>
+                      <div class="grid grid-cols-1 md:grid-cols-3 gap-4 mt-4">
+                        <div class="bg-slate-50 rounded-lg p-3">
+                          <p class="text-xs text-slate-500 mb-1">库位</p>
+                          <p class="text-sm font-medium text-slate-800">{{ record.location || '-' }}</p>
+                        </div>
+                        <div class="bg-slate-50 rounded-lg p-3">
+                          <p class="text-xs text-slate-500 mb-1">批次号</p>
+                          <p class="text-sm font-medium text-slate-800">{{ record.batchNo || '-' }}</p>
+                        </div>
+                        <div class="bg-slate-50 rounded-lg p-3">
+                          <p class="text-xs text-slate-500 mb-1">操作人</p>
+                          <p class="text-sm font-medium text-slate-800">{{ record.operator || '-' }}</p>
+                        </div>
+                      </div>
+                      <div v-if="record.remark" class="mt-3 pt-3 border-t border-slate-100">
+                        <p class="text-xs text-slate-500 mb-1">备注</p>
+                        <p class="text-sm text-slate-600">{{ record.remark }}</p>
+                      </div>
+                      <div class="mt-4 pt-4 border-t border-slate-100">
+                        <TraceabilityView type="warehouse" :id="record.id" />
+                      </div>
+                    </div>
+                  </div>
+                </td>
+              </tr>
+              </template>
               <tr v-if="paginatedRecords.length === 0">
-                <td colspan="9" class="px-4 py-12 text-center">
+                <td colspan="10" class="px-4 py-12 text-center">
                   <div class="flex flex-col items-center gap-2">
                     <ListTodo class="w-12 h-12 text-slate-300" />
                     <p class="text-sm text-slate-400">暂无出入库记录</p>
@@ -664,6 +890,188 @@ const handleTabChange = (tab: 'inventory' | 'records') => {
         <div class="flex items-center justify-between pt-2">
           <div class="text-sm text-slate-500">
             共 <span class="font-medium text-slate-700">{{ filteredRecords.length }}</span> 条记录
+          </div>
+          <div class="flex items-center gap-1">
+            <button
+              @click="goToPage(currentPage - 1)"
+              :disabled="currentPage === 1"
+              :class="[
+                'p-2 rounded-lg text-sm transition-colors',
+                currentPage === 1
+                  ? 'text-slate-300 cursor-not-allowed'
+                  : 'text-slate-600 hover:bg-slate-100'
+              ]"
+            >
+              <ChevronLeft class="w-4 h-4" />
+            </button>
+            <template v-for="page in totalPages" :key="page">
+              <button
+                v-if="page === 1 || page === totalPages || (page >= currentPage - 1 && page <= currentPage + 1)"
+                @click="goToPage(page)"
+                :class="[
+                  'min-w-9 h-9 px-2 rounded-lg text-sm font-medium transition-colors',
+                  currentPage === page
+                    ? 'bg-cyan-500 text-white'
+                    : 'text-slate-600 hover:bg-slate-100'
+                ]"
+              >
+                {{ page }}
+              </button>
+              <span
+                v-else-if="page === currentPage - 2 || page === currentPage + 2"
+                class="px-2 text-slate-400"
+              >
+                ...
+              </span>
+            </template>
+            <button
+              @click="goToPage(currentPage + 1)"
+              :disabled="currentPage === totalPages"
+              :class="[
+                'p-2 rounded-lg text-sm transition-colors',
+                currentPage === totalPages
+                  ? 'text-slate-300 cursor-not-allowed'
+                  : 'text-slate-600 hover:bg-slate-100'
+              ]"
+            >
+              <ChevronRight class="w-4 h-4" />
+            </button>
+          </div>
+        </div>
+      </div>
+
+      <div v-else-if="activeTab === 'flow'" class="space-y-4">
+        <div class="flex flex-wrap items-center gap-4">
+          <div class="flex items-center gap-2">
+            <Filter class="w-4 h-4 text-slate-400" />
+            <select
+              v-model="specFilter"
+              class="px-3 py-2.5 border border-slate-200 rounded-lg text-sm text-slate-600 focus:outline-none focus:ring-2 focus:ring-cyan-500 focus:border-transparent bg-white min-w-48"
+            >
+              <option value="">全部规格</option>
+              <option v-for="item in store.inventoryItems" :key="item.id" :value="item.spec">
+                {{ item.spec }}
+              </option>
+            </select>
+          </div>
+
+          <div class="flex items-center gap-2">
+            <Calendar class="w-4 h-4 text-slate-400" />
+            <input
+              v-model="flowDateStart"
+              type="date"
+              class="px-3 py-2.5 border border-slate-200 rounded-lg text-sm text-slate-600 focus:outline-none focus:ring-2 focus:ring-cyan-500 focus:border-transparent"
+            />
+            <span class="text-slate-400 text-sm">至</span>
+            <input
+              v-model="flowDateEnd"
+              type="date"
+              class="px-3 py-2.5 border border-slate-200 rounded-lg text-sm text-slate-600 focus:outline-none focus:ring-2 focus:ring-cyan-500 focus:border-transparent"
+            />
+          </div>
+
+          <button
+            @click="currentPage = 1"
+            class="flex items-center gap-2 px-4 py-2.5 bg-gradient-to-r from-cyan-500 to-blue-500 text-white rounded-lg hover:from-cyan-600 hover:to-blue-600 transition-all shadow-sm text-sm font-medium"
+          >
+            <Search class="w-4 h-4" />
+            查询
+          </button>
+
+          <button
+            @click="resetFlowFilters"
+            class="flex items-center gap-2 px-4 py-2.5 border border-slate-200 text-slate-600 rounded-lg text-sm hover:bg-slate-50 transition-colors"
+          >
+            <RefreshCw class="w-4 h-4" />
+            重置
+          </button>
+        </div>
+
+        <div class="overflow-x-auto rounded-lg border border-slate-200">
+          <table class="w-full">
+            <thead>
+              <tr class="bg-slate-50">
+                <th class="px-4 py-3 text-left text-xs font-semibold text-slate-600 uppercase tracking-wider">日期</th>
+                <th class="px-4 py-3 text-left text-xs font-semibold text-slate-600 uppercase tracking-wider">规格</th>
+                <th class="px-4 py-3 text-right text-xs font-semibold text-slate-600 uppercase tracking-wider">期初数量</th>
+                <th class="px-4 py-3 text-right text-xs font-semibold text-slate-600 uppercase tracking-wider">入库数量</th>
+                <th class="px-4 py-3 text-right text-xs font-semibold text-slate-600 uppercase tracking-wider">出库数量</th>
+                <th class="px-4 py-3 text-right text-xs font-semibold text-slate-600 uppercase tracking-wider">结存数量</th>
+                <th class="px-4 py-3 text-left text-xs font-semibold text-slate-600 uppercase tracking-wider">备注</th>
+              </tr>
+            </thead>
+            <tbody class="divide-y divide-slate-200">
+              <tr
+                v-for="(item, index) in paginatedFlow"
+                :key="`${item.date}-${item.spec}-${index}`"
+                class="hover:bg-slate-50 transition-colors"
+              >
+                <td class="px-4 py-4">
+                  <span class="text-sm text-slate-600">{{ item.date }}</span>
+                </td>
+                <td class="px-4 py-4">
+                  <span class="text-sm font-medium text-slate-800">{{ item.spec }}</span>
+                </td>
+                <td class="px-4 py-4 text-right">
+                  <span class="text-sm font-semibold text-slate-800">{{ formatNumber(item.opening) }}</span>
+                </td>
+                <td class="px-4 py-4 text-right">
+                  <span class="text-sm font-semibold text-emerald-600">{{ formatNumber(item.inQuantity) }}</span>
+                </td>
+                <td class="px-4 py-4 text-right">
+                  <span class="text-sm font-semibold text-blue-600">{{ formatNumber(item.outQuantity) }}</span>
+                </td>
+                <td class="px-4 py-4 text-right">
+                  <span
+                    :class="[
+                      'text-sm font-semibold',
+                      item.closing < 1000 ? 'text-red-600' : 'text-slate-800'
+                    ]"
+                  >
+                    {{ formatNumber(item.closing) }}
+                  </span>
+                </td>
+                <td class="px-4 py-4">
+                  <span class="text-sm text-slate-500">{{ item.remark || '-' }}</span>
+                </td>
+              </tr>
+              <tr v-if="paginatedFlow.length === 0">
+                <td colspan="7" class="px-4 py-12 text-center">
+                  <div class="flex flex-col items-center gap-2">
+                    <TrendingUp class="w-12 h-12 text-slate-300" />
+                    <p class="text-sm text-slate-400">暂无库存流水数据</p>
+                  </div>
+                </td>
+              </tr>
+              <tr v-if="inventoryFlowData.length > 0" class="bg-slate-50 font-semibold">
+                <td class="px-4 py-4 text-sm text-slate-700" colspan="2">
+                  <span class="flex items-center gap-2">
+                    <TrendingDown class="w-4 h-4 text-slate-500" />
+                    合计
+                  </span>
+                </td>
+                <td class="px-4 py-4 text-right text-sm text-slate-700">-</td>
+                <td class="px-4 py-4 text-right text-sm text-emerald-600">{{ formatNumber(flowSummary.totalIn) }}</td>
+                <td class="px-4 py-4 text-right text-sm text-blue-600">{{ formatNumber(flowSummary.totalOut) }}</td>
+                <td class="px-4 py-4 text-right">
+                  <span
+                    :class="[
+                      'text-sm',
+                      flowSummary.finalClosing < 1000 ? 'text-red-600' : 'text-slate-800'
+                    ]"
+                  >
+                    {{ formatNumber(flowSummary.finalClosing) }}
+                  </span>
+                </td>
+                <td class="px-4 py-4 text-sm text-slate-500">最终结存</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+
+        <div class="flex items-center justify-between pt-2">
+          <div class="text-sm text-slate-500">
+            共 <span class="font-medium text-slate-700">{{ inventoryFlowData.length }}</span> 条记录
           </div>
           <div class="flex items-center gap-1">
             <button

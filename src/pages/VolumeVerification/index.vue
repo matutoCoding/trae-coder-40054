@@ -21,6 +21,7 @@ import { useAppStore } from '@/stores/app'
 import type { VolumeCheck } from '@/types'
 import BaseModal from '@/components/Modal/BaseModal.vue'
 import { useToast } from '@/composables/useToast'
+import TraceabilityView from '@/components/Traceability/TraceabilityView.vue'
 
 const store = useAppStore()
 const toast = useToast()
@@ -332,6 +333,16 @@ const handleSave = () => {
     return
   }
 
+  if (form.sampleCount <= 0) {
+    toast.warning('抽样数必须大于0')
+    return
+  }
+
+  if (form.qualifiedCount > form.sampleCount) {
+    toast.warning('合格数不能超过抽样数')
+    return
+  }
+
   if (editingId.value) {
     store.updateVolumeCheck(editingId.value, { ...form })
     toast.success('校验记录已更新')
@@ -576,6 +587,9 @@ const handleModalClose = () => {
                       <div v-if="item.remark" class="pt-3 border-t border-slate-100">
                         <p class="text-xs text-slate-500 mb-1">备注</p>
                         <p class="text-sm text-slate-600">{{ item.remark }}</p>
+                      </div>
+                      <div class="mt-4 pt-4 border-t border-slate-100">
+                        <TraceabilityView type="volumeCheck" :id="item.id" />
                       </div>
                     </div>
                   </div>

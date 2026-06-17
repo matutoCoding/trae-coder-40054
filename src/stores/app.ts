@@ -335,6 +335,10 @@ export const useAppStore = defineStore('app', () => {
     const record = blowMoldingRecords.value.find(r => r.id === id)
     if (record && record.status === 'running') {
       record.status = 'paused'
+      const equipment = equipments.value.find(e => e.equipmentNo === record.machineNo)
+      if (equipment) {
+        equipment.status = 'idle'
+      }
       updateDashboardStats()
       return true
     }
@@ -346,6 +350,10 @@ export const useAppStore = defineStore('app', () => {
     if (record) {
       record.status = 'completed'
       record.endTime = new Date().toLocaleString('zh-CN', { hour12: false }).replace(/\//g, '-')
+      const equipment = equipments.value.find(e => e.equipmentNo === record.machineNo)
+      if (equipment) {
+        equipment.status = 'idle'
+      }
       updateDashboardStats()
       return true
     }
@@ -650,6 +658,147 @@ export const useAppStore = defineStore('app', () => {
     blowMoldingRecords.value.filter(r => r.status === 'completed')
   )
 
+  const getTraceability = (type: string, id: string) => {
+    const result: any = {
+      purchase: null,
+      preformInspection: null,
+      blowMolding: null,
+      bottleInspection: null,
+      volumeCheck: null,
+      warehouseRecords: []
+    }
+
+    switch (type) {
+      case 'purchase': {
+        const purchase = purchaseOrders.value.find(o => o.id === id)
+        if (purchase) {
+          result.purchase = purchase
+          result.preformInspection = preformInspections.value.find(i => i.purchaseId === id) || null
+          if (result.preformInspection) {
+            result.blowMolding = blowMoldingRecords.value.find(r => r.productSpec === purchase.spec && r.startTime?.startsWith(result.preformInspection.inspectDate)) || null
+            if (result.blowMolding) {
+              result.bottleInspection = bottleInspections.value.find(i => i.blowId === result.blowMolding!.id) || null
+              if (result.bottleInspection) {
+                result.volumeCheck = volumeChecks.value.find(v => v.bottleInspectionId === result.bottleInspection!.id) || null
+              }
+            }
+          }
+          result.warehouseRecords = warehouseRecords.value.filter(r => r.spec === purchase.spec && r.relatedOrderId?.startsWith('PO'))
+        }
+        break
+      }
+      case 'preformInspection': {
+        const inspection = preformInspections.value.find(i => i.id === id)
+        if (inspection) {
+          result.preformInspection = inspection
+          result.purchase = purchaseOrders.value.find(o => o.id === inspection.purchaseId) || null
+          result.blowMolding = blowMoldingRecords.value.find(r => 
+            r.productSpec === inspection.purchaseSpec && 
+            r.startTime?.startsWith(inspection.inspectDate)
+          ) || null
+          if (result.blowMolding) {
+            result.bottleInspection = bottleInspections.value.find(i => i.blowId === result.blowMolding!.id) || null
+            if (result.bottleInspection) {
+              result.volumeCheck = volumeChecks.value.find(v => v.bottleInspectionId === result.bottleInspection!.id) || null
+            }
+          }
+          if (result.purchase) {
+            result.warehouseRecords = warehouseRecords.value.filter(r => r.spec === result.purchase.spec && r.type === 'in')
+          }
+        }
+        break
+      }
+      case 'blowMolding': {
+        const blow = blowMoldingRecords.value.find(r => r.id === id)
+        if (blow) {
+          result.blowMolding = blow
+          const inspection = preformInspections.value.find(i => 
+            i.purchaseSpec === blow.productSpec && 
+            blow.startTime?.startsWith(i.inspectDate)
+          )
+          result.preformInspection = inspection || null
+          if (inspection) {
+            result.purchase = purchaseOrders.value.find(o => o.id === inspection.purchaseId) || null
+          }
+          result.bottleInspection = bottleInspections.value.find(i => i.blowId === blow.id) || null
+          if (result.bottleInspection) {
+            result.volumeCheck = volumeChecks.value.find(v => v.bottleInspectionId === result.bottleInspection!.id) || null
+          }
+          result.warehouseRecords = warehouseRecords.value.filter(r => r.spec === blow.productSpec)
+        }
+        break
+      }
+      case 'bottleInspection': {
+        const bottle = bottleInspections.value.find(i => i.id === id)
+        if (bottle) {
+          result.bottleInspection = bottle
+          result.blowMolding = blowMoldingRecords.value.find(r => r.id === bottle.blowId) || null
+          if (result.blowMolding) {
+            const inspection = preformInspections.value.find(i => 
+              i.purchaseSpec === result.blowMolding!.productSpec && 
+              result.blowMolding!.startTime?.startsWith(i.inspectDate)
+            )
+            result.preformInspection = inspection || null
+            if (inspection) {
+              result.purchase = purchaseOrders.value.find(o => o.id === inspection.purchaseId) || null
+            }
+          }
+          result.volumeCheck = volumeChecks.value.find(v => v.bottleInspectionId === bottle.id) || null
+          result.warehouseRecords = warehouseRecords.value.filter(r => r.spec === bottle.productSpec)
+        }
+        break
+      }
+      case 'volumeCheck': {
+        const volume = volumeChecks.value.find(v => v.id === id)
+        if (volume) {
+          result.volumeCheck = volume
+          result.bottleInspection = bottleInspections.value.find(i => i.id === volume.bottleInspectionId) || null
+          if (result.bottleInspection) {
+            result.blowMolding = blowMoldingRecords.value.find(r => r.id === result.bottleInspection!.blowId) || null
+            if (result.blowMolding) {
+              const inspection = preformInspections.value.find(i => 
+                i.purchaseSpec === result.blowMolding!.productSpec && 
+                result.blowMolding!.startTime?.startsWith(i.inspectDate)
+              )
+              result.preformInspection = inspection || null
+              if (inspection) {
+                result.purchase = purchaseOrders.value.find(o => o.id === inspection.purchaseId) || null
+              }
+            }
+          }
+          result.warehouseRecords = warehouseRecords.value.filter(r => r.spec === volume.productSpec)
+        }
+        break
+      }
+      case 'warehouse': {
+        const warehouse = warehouseRecords.value.find(r => r.id === id)
+        if (warehouse) {
+          result.warehouseRecords = [warehouse]
+          result.volumeCheck = volumeChecks.value.find(v => v.productSpec === warehouse.spec) || null
+          if (result.volumeCheck) {
+            result.bottleInspection = bottleInspections.value.find(i => i.id === result.volumeCheck!.bottleInspectionId) || null
+            if (result.bottleInspection) {
+              result.blowMolding = blowMoldingRecords.value.find(r => r.id === result.bottleInspection!.blowId) || null
+              if (result.blowMolding) {
+                const inspection = preformInspections.value.find(i => 
+                  i.purchaseSpec === result.blowMolding!.productSpec && 
+                  result.blowMolding!.startTime?.startsWith(i.inspectDate)
+                )
+                result.preformInspection = inspection || null
+                if (inspection) {
+                  result.purchase = purchaseOrders.value.find(o => o.id === inspection.purchaseId) || null
+                }
+              }
+            }
+          }
+        }
+        break
+      }
+    }
+
+    return result
+  }
+
   return {
     suppliers,
     purchaseOrders,
@@ -698,6 +847,7 @@ export const useAppStore = defineStore('app', () => {
     updateMaintenanceLog,
     deleteMaintenanceLog,
     getMaintenanceLogsByEquipment,
+    getTraceability,
     updateDashboardStats,
     runningEquipments,
     pendingInspections,

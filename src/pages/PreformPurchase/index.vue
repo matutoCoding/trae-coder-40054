@@ -15,12 +15,15 @@ import {
   Phone,
   MapPin,
   Truck,
-  ClipboardCheck
+  ClipboardCheck,
+  ChevronDown,
+  ChevronUp
 } from 'lucide-vue-next'
 import { useAppStore } from '@/stores/app'
 import BaseModal from '@/components/Modal/BaseModal.vue'
 import { useToast } from '@/composables/useToast'
 import type { PurchaseOrder, Supplier } from '@/types'
+import TraceabilityView from '@/components/Traceability/TraceabilityView.vue'
 
 const store = useAppStore()
 const toast = useToast()
@@ -34,6 +37,7 @@ const dateRangeEnd = ref('')
 
 const currentPage = ref(1)
 const pageSize = ref(10)
+const expandedRows = ref<string[]>([])
 
 const showAddModal = ref(false)
 
@@ -248,6 +252,19 @@ const goToPage = (page: number) => {
     currentPage.value = page
   }
 }
+
+const toggleRowExpand = (id: string) => {
+  const index = expandedRows.value.indexOf(id)
+  if (index > -1) {
+    expandedRows.value.splice(index, 1)
+  } else {
+    expandedRows.value.push(id)
+  }
+}
+
+const isRowExpanded = (id: string) => {
+  return expandedRows.value.includes(id)
+}
 </script>
 
 <template>
@@ -357,6 +374,7 @@ const goToPage = (page: number) => {
           <table class="w-full">
             <thead>
               <tr class="bg-slate-50">
+                <th class="px-4 py-3 text-left text-xs font-semibold text-slate-600 uppercase tracking-wider w-10"></th>
                 <th class="px-4 py-3 text-left text-xs font-semibold text-slate-600 uppercase tracking-wider">采购单号</th>
                 <th class="px-4 py-3 text-left text-xs font-semibold text-slate-600 uppercase tracking-wider">供应商</th>
                 <th class="px-4 py-3 text-left text-xs font-semibold text-slate-600 uppercase tracking-wider">规格</th>
@@ -369,11 +387,23 @@ const goToPage = (page: number) => {
               </tr>
             </thead>
             <tbody class="divide-y divide-slate-200">
-              <tr
-                v-for="order in paginatedOrders"
-                :key="order.id"
-                class="hover:bg-slate-50 transition-colors"
-              >
+              <template v-for="order in paginatedOrders" :key="order.id">
+                <tr class="hover:bg-slate-50 transition-colors">
+                  <td class="px-4 py-4">
+                    <button
+                      @click="toggleRowExpand(order.id)"
+                      class="p-1 rounded hover:bg-slate-200 transition-colors"
+                    >
+                      <ChevronDown
+                        v-if="!isRowExpanded(order.id)"
+                        class="w-4 h-4 text-slate-400"
+                      />
+                      <ChevronUp
+                        v-else
+                        class="w-4 h-4 text-slate-400"
+                      />
+                    </button>
+                  </td>
                 <td class="px-4 py-4">
                   <span class="text-sm font-medium text-slate-800">{{ order.id }}</span>
                 </td>
@@ -446,8 +476,48 @@ const goToPage = (page: number) => {
                   </div>
                 </td>
               </tr>
+              <tr v-if="isRowExpanded(order.id)" class="bg-slate-50">
+                <td colspan="10" class="px-4 py-4">
+                  <div class="pl-8">
+                    <div class="bg-white rounded-lg p-4 border border-slate-200">
+                      <h4 class="text-sm font-semibold text-slate-700 mb-3 flex items-center gap-2">
+                        <Package class="w-4 h-4 text-cyan-500" />
+                        采购详情
+                      </h4>
+                      <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+                        <div class="bg-slate-50 rounded-lg p-3">
+                          <p class="text-xs text-slate-500 mb-1">预计到货日期</p>
+                          <p class="text-sm font-medium text-slate-800">{{ order.expectedDate || '-' }}</p>
+                        </div>
+                        <div class="bg-slate-50 rounded-lg p-3">
+                          <p class="text-xs text-slate-500 mb-1">单重</p>
+                          <p class="text-sm font-medium text-slate-800">{{ order.weight }} g</p>
+                        </div>
+                        <div class="bg-slate-50 rounded-lg p-3">
+                          <p class="text-xs text-slate-500 mb-1">总金额</p>
+                          <p class="text-sm font-medium text-slate-800">¥{{ formatAmount(order.totalAmount) }}</p>
+                        </div>
+                        <div class="bg-cyan-50 rounded-lg p-3">
+                          <p class="text-xs text-cyan-600 mb-1">状态</p>
+                          <span :class="[getStatusClass(order.status), 'text-xs px-2.5 py-1 rounded-full font-medium']">
+                            {{ getStatusText(order.status) }}
+                          </span>
+                        </div>
+                      </div>
+                      <div v-if="order.remark" class="mt-3 pt-3 border-t border-slate-100">
+                        <p class="text-xs text-slate-500 mb-1">备注</p>
+                        <p class="text-sm text-slate-600">{{ order.remark }}</p>
+                      </div>
+                      <div class="mt-4 pt-4 border-t border-slate-100">
+                        <TraceabilityView type="purchase" :id="order.id" />
+                      </div>
+                    </div>
+                  </div>
+                </td>
+              </tr>
+              </template>
               <tr v-if="paginatedOrders.length === 0">
-                <td colspan="9" class="px-4 py-12 text-center">
+                <td colspan="10" class="px-4 py-12 text-center">
                   <div class="flex flex-col items-center gap-2">
                     <Package class="w-12 h-12 text-slate-300" />
                     <p class="text-sm text-slate-400">暂无采购单数据</p>
